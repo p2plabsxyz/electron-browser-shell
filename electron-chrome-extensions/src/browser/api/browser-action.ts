@@ -209,6 +209,7 @@ export class BrowserActionAPI {
 
     sessionExtensions.on('extension-unloaded', (event, extension) => {
       this.removeActions(extension.id)
+      this.ctx.store.clearActivationContext(extension.id)
     })
   }
 
@@ -402,6 +403,15 @@ export class BrowserActionAPI {
       tabId >= 0 ? this.ctx.store.getTabById(tabId) : this.ctx.store.getActiveTabOfCurrentWindow()
     if (!tab) {
       throw new Error(`Unable to get active tab`)
+    }
+
+    // Pin this window/tab as the invocation context for the extension so that
+    // subsequent API calls (e.g. tabs.query({ currentWindow: true })) resolve
+    // to the correct window regardless of OS focus changes (e.g. popup close).
+    const activationWin = this.ctx.store.tabToWindow.get(tab)
+    if (activationWin && !activationWin.isDestroyed()) {
+      this.ctx.store.setActivationContext(extensionId, activationWin.id, tab.id)
+      d(`activation context set [extensionId: '${extensionId}', windowId: ${activationWin.id}, tabId: ${tab.id}]`)
     }
 
     const popupUrl = this.getPopupUrl(extensionId, tab.id)

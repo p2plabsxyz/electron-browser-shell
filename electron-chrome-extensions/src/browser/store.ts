@@ -29,6 +29,41 @@ export class ExtensionStore extends EventEmitter {
 
   urlOverrides: Record<string, string> = {}
 
+  /**
+   * Tracks which window/tab triggered the most recent browser-action click for
+   * each extension. Without this, calls like `tabs.query({ currentWindow: true })`
+   * would use whichever window the OS happens to be focusing at that moment —
+   * which can be the wrong one if focus shifted while a popup was opening.
+   *
+   * Overwritten on every click; deleted when the extension unloads.
+   */
+  private activationContextMap = new Map<string, { windowId: number; tabId: number }>()
+
+  /** Remember which window/tab clicked the browser action for this extension. */
+  setActivationContext(extensionId: string, windowId: number, tabId: number) {
+    this.activationContextMap.set(extensionId, { windowId, tabId })
+  }
+
+  /** Forget the activation context when an extension unloads. */
+  clearActivationContext(extensionId: string) {
+    this.activationContextMap.delete(extensionId)
+  }
+
+  /**
+   * Returns the "current window" for an extension.
+   *
+   * If the extension recently clicked a browser action, returns that window.
+   * Otherwise falls back to the OS-focused window (normal behaviour).
+   */
+  getCurrentWindowForExtension(extensionId: string): Electron.BaseWindow | null {
+    const ctx = this.activationContextMap.get(extensionId)
+    if (ctx) {
+      const win = this.getWindowById(ctx.windowId)
+      if (win) return win
+    }
+    return this.getCurrentWindow()
+  }
+
   constructor(public impl: ChromeExtensionImpl) {
     super()
   }
