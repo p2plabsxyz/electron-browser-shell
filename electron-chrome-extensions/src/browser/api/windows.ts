@@ -18,8 +18,9 @@ export class WindowsAPI {
   constructor(private ctx: ExtensionContext) {
     const handle = this.ctx.router.apiHandler()
     handle('windows.get', this.get.bind(this))
-    // TODO: how does getCurrent differ from getLastFocused?
-    handle('windows.getCurrent', this.getLastFocused.bind(this))
+    // windows.getCurrent returns the window associated with the calling context;
+    // windows.getLastFocused always returns the OS-focused window.
+    handle('windows.getCurrent', this.getCurrent.bind(this))
     handle('windows.getLastFocused', this.getLastFocused.bind(this))
     handle('windows.getAll', this.getAll.bind(this))
     handle('windows.create', this.create.bind(this))
@@ -85,8 +86,11 @@ export class WindowsAPI {
     return details
   }
 
-  private getWindowFromId(id: number) {
+  private getWindowFromId(id: number, extensionId?: string) {
     if (id === WindowsAPI.WINDOW_ID_CURRENT) {
+      if (extensionId) {
+        return this.ctx.store.getCurrentWindowForExtension(extensionId)
+      }
       return this.ctx.store.getCurrentWindow()
     } else {
       return this.ctx.store.getWindowById(id)
@@ -94,9 +98,16 @@ export class WindowsAPI {
   }
 
   private get(event: ExtensionEvent, windowId: number) {
-    const win = this.getWindowFromId(windowId)
+    const win = this.getWindowFromId(windowId, event.extension.id)
     if (!win) return { id: WindowsAPI.WINDOW_ID_NONE }
     return this.getWindowDetails(win)
+  }
+
+  // windows.getCurrent: returns the window that contains the calling code.
+  // For browser-action-triggered code, this should be the activation window.
+  private getCurrent(event: ExtensionEvent) {
+    const win = this.ctx.store.getCurrentWindowForExtension(event.extension.id)
+    return win ? this.getWindowDetails(win) : null
   }
 
   private getLastFocused(event: ExtensionEvent) {
@@ -144,7 +155,7 @@ export class WindowsAPI {
   }
 
   private async remove(event: ExtensionEvent, windowId: number = WindowsAPI.WINDOW_ID_CURRENT) {
-    const win = this.getWindowFromId(windowId)
+    const win = this.getWindowFromId(windowId, event.extension.id)
     if (!win) return
     const removedWindowId = win.id
     await this.ctx.store.removeWindow(win)
