@@ -147,7 +147,10 @@ export class TabsAPI {
   }
 
   private getAllInWindow(event: ExtensionEvent, windowId: number = TabsAPI.WINDOW_ID_CURRENT) {
-    if (windowId === TabsAPI.WINDOW_ID_CURRENT) windowId = this.ctx.store.lastFocusedWindowId!
+    if (windowId === TabsAPI.WINDOW_ID_CURRENT) {
+      const currentWin = this.ctx.store.getCurrentWindowForExtension(event.extension.id)
+      windowId = currentWin?.id ?? this.ctx.store.lastFocusedWindowId!
+    }
 
     const tabs = Array.from(this.ctx.store.tabs).filter((tab) => {
       if (tab.isDestroyed()) return false
@@ -162,7 +165,10 @@ export class TabsAPI {
   }
 
   private getCurrent(event: ExtensionEvent) {
-    const tab = this.ctx.store.getActiveTabOfCurrentWindow()
+    const currentWin = this.ctx.store.getCurrentWindowForExtension(event.extension.id)
+    const tab = currentWin
+      ? this.ctx.store.getActiveTabFromWindow(currentWin)
+      : this.ctx.store.getActiveTabOfCurrentWindow()
     return tab ? this.getTabDetails(tab) : undefined
   }
 
@@ -189,6 +195,11 @@ export class TabsAPI {
   private query(event: ExtensionEvent, info: chrome.tabs.QueryInfo = {}) {
     const isSet = (value: any) => typeof value !== 'undefined'
 
+    // Resolve the effective "current window" for this extension, preferring
+    // its browser-action activation context over the OS-focused window.
+    const currentWin = this.ctx.store.getCurrentWindowForExtension(event.extension.id)
+    const effectiveCurrentWindowId = currentWin?.id ?? this.ctx.store.lastFocusedWindowId
+
     const filteredTabs = Array.from(this.ctx.store.tabs)
       .map(this.getTabDetails.bind(this))
       .filter((tab) => {
@@ -201,8 +212,10 @@ export class TabsAPI {
         if (isSet(info.discarded) && info.discarded !== tab.discarded) return false
         if (isSet(info.autoDiscardable) && info.autoDiscardable !== tab.autoDiscardable)
           return false
-        // if (isSet(info.currentWindow)) return false
-        // if (isSet(info.lastFocusedWindow)) return false
+        if (isSet(info.currentWindow)) {
+          const inCurrentWindow = effectiveCurrentWindowId === tab.windowId
+          if (info.currentWindow !== inCurrentWindow) return false
+        }
         if (isSet(info.frozen) && info.frozen !== tab.frozen) return false
         if (isSet(info.groupId) && info.groupId !== tab.groupId) return false
         if (isSet(info.status) && info.status !== tab.status) return false
@@ -221,7 +234,7 @@ export class TabsAPI {
         }
         if (isSet(info.windowId)) {
           if (info.windowId === TabsAPI.WINDOW_ID_CURRENT) {
-            if (this.ctx.store.lastFocusedWindowId !== tab.windowId) return false
+            if (effectiveCurrentWindowId !== tab.windowId) return false
           } else if (info.windowId !== tab.windowId) {
             return false
           }
