@@ -1,9 +1,0 @@
-{
-  "name": "WebUI",
-  "version": "1.0.0",
-  "manifest_version": 3,
-  "permissions": [],
-  "chrome_url_overrides": {
-    "newtab": "new-tab.html"
-  }
-}
