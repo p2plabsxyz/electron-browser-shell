@@ -1,22 +1,28 @@
+const esbuild = require('esbuild');
 const packageJson = require('./package.json')
-const { createConfig, build, EXTERNAL_BASE } = require('../../build/esbuild/esbuild.config.base')
 
 console.log(`building ${packageJson.name}`)
 
-const external = [...EXTERNAL_BASE, 'electron-chrome-extensions/preload']
+const external = ['electron', 'peersky-chrome-extensions/preload']
+
+const createConfig = (opts) => ({
+  ...opts,
+  bundle: true,
+  external,
+})
+
+const build = (config) => esbuild.build(config).catch(() => process.exit(1));
 
 const browserConfig = createConfig({
   entryPoints: ['src/index.ts'],
   outfile: 'dist/cjs/index.js',
   platform: 'node',
-  external,
 })
 
 const browserESMConfig = createConfig({
   entryPoints: ['src/index.ts'],
   outfile: 'dist/esm/index.mjs',
   platform: 'node',
-  external,
   format: 'esm',
 })
 

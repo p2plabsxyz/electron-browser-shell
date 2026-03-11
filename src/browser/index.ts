@@ -32,7 +32,7 @@ function checkVersion() {
 function resolvePreloadPath(modulePath?: string) {
   // Attempt to resolve preload path from module exports
   try {
-    return createRequire(__dirname).resolve('electron-chrome-extensions/preload')
+    return createRequire(__dirname).resolve('peersky-chrome-extensions/preload')
   } catch (error) {
     if (process.env.NODE_ENV !== 'production') {
       console.error(error)
@@ -50,8 +50,8 @@ function resolvePreloadPath(modulePath?: string) {
     return path.join(modulePath, 'dist', preloadFilename)
   }
 
-  // Fallback to preload relative to entrypoint directory
-  return path.join(__dirname, preloadFilename)
+  // Fallback to preload relative to entrypoint directory (dist/cjs/ -> dist/)
+  return path.join(__dirname, '..', preloadFilename)
 }
 
 export interface ChromeExtensionOptions extends ChromeExtensionImpl {
