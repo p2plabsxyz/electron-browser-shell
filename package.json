@@ -1,7 +1,7 @@
 {
   "name": "peersky-chrome-extensions",
   "version": "4.9.0",
-  "description": "Chrome extension support for Electron",
+  "description": "Fork of electron-browser-shell with extended Chrome API implementations for browser extensions",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.mjs",
   "types": "./dist/types/index.d.ts",
@@ -37,8 +37,8 @@
     "chrome",
     "extensions"
   ],
-  "repository": "https://github.com/samuelmaddock/electron-browser-shell",
-  "author": "Samuel Maddock <sam@samuelmaddock.com>",
+  "repository": "https://github.com/p2plabsxyz/peersky-browser-shell",
+  "author": "P2P Labs <contact@p2plabs.xyz>",
   "license": "SEE LICENSE IN LICENSE.md",
   "files": [
     "dist",
