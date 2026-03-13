@@ -538,11 +538,37 @@ export const injectExtensionAPIs = () => {
       storage: {
         factory: (base) => {
           const local = base && base.local
+
+          const customOnChanged = new ExtensionEvent('storage.onChanged')
+          const originalAddListener = base?.onChanged?.addListener?.bind(base.onChanged)
+          const originalRemoveListener = base?.onChanged?.removeListener?.bind(base.onChanged)
+
+          const addListener = (cb: any) => {
+            if (originalAddListener) originalAddListener(cb)
+            customOnChanged.addListener(cb)
+          }
+          const removeListener = (cb: any) => {
+            if (originalRemoveListener) originalRemoveListener(cb)
+            customOnChanged.removeListener(cb)
+          }
+          const hasListener = (cb: any) => {
+            return customOnChanged.hasListener(cb) || (base?.onChanged?.hasListener?.(cb) ?? false)
+          }
+
+          const onChanged = { addListener, removeListener, hasListener }
+
           return {
             ...base,
+            onChanged,
             // TODO: provide a backend for browsers to opt-in to
             managed: local,
-            sync: local,
+            sync: {
+              get: invokeExtension('storage.sync.get'),
+              set: invokeExtension('storage.sync.set'),
+              remove: invokeExtension('storage.sync.remove'),
+              clear: invokeExtension('storage.sync.clear'),
+              getBytesInUse: invokeExtension('storage.sync.getBytesInUse'),
+            },
           }
         },
       },

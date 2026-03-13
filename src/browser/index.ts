@@ -10,6 +10,7 @@ import { TabsAPI } from './api/tabs'
 import { WindowsAPI } from './api/windows'
 import { WebNavigationAPI } from './api/web-navigation'
 import { ExtensionStore } from './store'
+import { StorageSyncAPI } from './api/storage-sync'
 import { ContextMenusAPI } from './api/context-menus'
 import { RuntimeAPI } from './api/runtime'
 import { CookiesAPI } from './api/cookies'
@@ -130,6 +131,7 @@ export class ElectronChromeExtensions extends EventEmitter {
     notifications: NotificationsAPI
     permissions: PermissionsAPI
     runtime: RuntimeAPI
+    storageSync: StorageSyncAPI
     tabs: TabsAPI
     webNavigation: WebNavigationAPI
     windows: WindowsAPI
@@ -168,6 +170,7 @@ export class ElectronChromeExtensions extends EventEmitter {
       notifications: new NotificationsAPI(this.ctx),
       permissions: new PermissionsAPI(this.ctx),
       runtime: new RuntimeAPI(this.ctx),
+      storageSync: new StorageSyncAPI(this.ctx),
       tabs: new TabsAPI(this.ctx),
       webNavigation: new WebNavigationAPI(this.ctx),
       windows: new WindowsAPI(this.ctx),
