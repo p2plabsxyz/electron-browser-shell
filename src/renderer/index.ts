@@ -641,6 +641,7 @@ export const injectExtensionAPIs = () => {
             get: invokeExtension('tabs.get'),
             getCurrent: invokeExtension('tabs.getCurrent'),
             getAllInWindow: invokeExtension('tabs.getAllInWindow'),
+            captureVisibleTab: invokeExtension('tabs.captureVisibleTab'),
             insertCSS: invokeExtension('tabs.insertCSS'),
             query: invokeExtension('tabs.query'),
             reload: invokeExtension('tabs.reload'),
