@@ -241,4 +241,16 @@ export class ExtensionStore extends EventEmitter {
     const result: unknown = await this.impl.requestPermissions(extension, permissions)
     return typeof result === 'boolean' ? result : false
   }
+
+  // Resolve WebContents id to the cached chrome.tabs tab id.
+  getTabIdForWebContentsId(webContentsId: number): number {
+    const tab = Array.from(this.tabs).find(
+      (t) => !t.isDestroyed() && t.id === webContentsId,
+    )
+    if (!tab) return -1
+
+    const cached = this.tabDetailsCache.get(tab.id)
+    const cachedId = cached && typeof cached.id === 'number' ? cached.id : undefined
+    return typeof cachedId === 'number' ? cachedId : -1
+  }
 }

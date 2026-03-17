@@ -381,10 +381,12 @@ export class ExtensionRouter {
       }
     }
 
+    // Some handlers allow calls without a loaded extension context.
+    const extensionForEvent = extension ?? (extensionId ? { id: extensionId, manifest: {} } as ExtendedExtension : undefined)
     const extEvent: ExtensionEvent =
       event.type === 'frame'
-        ? { type: event.type, sender: event.sender, extension: extension! }
-        : { type: event.type, sender: event.serviceWorker, extension: extension! }
+        ? { type: event.type, sender: event.sender, extension: extensionForEvent! }
+        : { type: event.type, sender: event.serviceWorker, extension: extensionForEvent! }
 
     const result = await handler.callback(extEvent, ...args)
 

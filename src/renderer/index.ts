@@ -562,9 +562,6 @@ export const injectExtensionAPIs = () => {
             },
             openOptionsPage: invokeExtension('runtime.openOptionsPage'),
             sendNativeMessage: invokeExtension('runtime.sendNativeMessage'),
-            /** Forward extension logs to the main process console. */
-            logToMain: (...args: unknown[]) =>
-              electron.invokeExtension(extensionId, 'runtime.logToMain', {}, ...args),
           }
         },
       },
@@ -693,24 +690,317 @@ export const injectExtensionAPIs = () => {
       webRequest: {
         factory: (base) => {
           const onBeforeRequestEvent = new ExtensionEvent<
-            (details: chrome.webRequest.WebRequestBodyDetails) => void
+            (details: chrome.webRequest.WebRequestBodyDetails) =>
+              | void
+              | { cancel?: boolean; redirectUrl?: string }
           >('webRequest.onBeforeRequest')
+          const onBeforeRequestWrapperMap = new Map<
+            (
+              details: chrome.webRequest.WebRequestBodyDetails,
+            ) => void | { cancel?: boolean; redirectUrl?: string },
+            (details: chrome.webRequest.WebRequestBodyDetails) => void
+          >()
+
+          const onBeforeSendHeadersEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebRequestHeadersDetails) => void | { requestHeaders?: any }
+          >('webRequest.onBeforeSendHeaders')
+          const onBeforeSendHeadersWrapperMap = new Map<
+            (details: chrome.webRequest.WebRequestHeadersDetails) => void | { requestHeaders?: any },
+            (details: chrome.webRequest.WebRequestHeadersDetails) => void
+          >()
+
+          const onHeadersReceivedEvent = new ExtensionEvent<
+            (
+              details: chrome.webRequest.WebResponseHeadersDetails,
+            ) => void | { responseHeaders?: any }
+          >('webRequest.onHeadersReceived')
+          const onHeadersReceivedWrapperMap = new Map<
+            (details: chrome.webRequest.WebResponseHeadersDetails) => void | { responseHeaders?: any },
+            (details: chrome.webRequest.WebResponseHeadersDetails) => void
+          >()
+
+          const onSendHeadersEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebRequestHeadersDetails) => void
+          >('webRequest.onSendHeaders')
+
+          const onResponseStartedEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebResponseCacheDetails) => void
+          >('webRequest.onResponseStarted')
+
+          const onCompletedEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebResponseCacheDetails) => void
+          >('webRequest.onCompleted')
+
+          const onErrorOccurredEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebResponseErrorDetails) => void
+          >('webRequest.onErrorOccurred')
+
           return {
             ...base,
             onBeforeRequest: {
               addListener(
-                callback: (details: chrome.webRequest.WebRequestBodyDetails) => void,
+                callback: (
+                  details: chrome.webRequest.WebRequestBodyDetails,
+                ) => void | { cancel?: boolean; redirectUrl?: string },
                 filter: chrome.webRequest.RequestFilter,
                 extraInfoSpec?: string[],
               ) {
-                invokeExtension('webRequest.addOnBeforeRequestListener')(filter, extraInfoSpec)
-                onBeforeRequestEvent.addListener(callback)
+                invokeExtension('webRequest.addOnBeforeRequestListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                const wrapper = (details: chrome.webRequest.WebRequestBodyDetails) => {
+                  const reqId = details && (details as any).requestId
+                  Promise.resolve(callback(details)).then((result) => {
+                    if (reqId != null) {
+                      invokeExtension('webRequest.onBeforeRequest.response')(
+                        reqId,
+                        result || undefined,
+                      ).catch(() => {})
+                    }
+                  })
+                }
+                onBeforeRequestWrapperMap.set(callback, wrapper)
+                onBeforeRequestEvent.addListener(wrapper)
               },
-              removeListener(callback: (details: chrome.webRequest.WebRequestBodyDetails) => void) {
-                onBeforeRequestEvent.removeListener(callback)
+              removeListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestBodyDetails,
+                ) => void | { cancel?: boolean; redirectUrl?: string },
+              ) {
+                const wrapper = onBeforeRequestWrapperMap.get(callback)
+                if (wrapper) {
+                  onBeforeRequestEvent.removeListener(wrapper)
+                  onBeforeRequestWrapperMap.delete(callback)
+                } else {
+                  onBeforeRequestEvent.removeListener(callback as any)
+                }
+              },
+              hasListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestBodyDetails,
+                ) => void | { cancel?: boolean; redirectUrl?: string },
+              ) {
+                return onBeforeRequestEvent.hasListener(
+                  onBeforeRequestWrapperMap.get(callback) || (callback as any),
+                )
+              },
+              hasListeners() {
+                return onBeforeRequestEvent.hasListeners()
               },
             },
-            onHeadersReceived: new ExtensionEvent('webRequest.onHeadersReceived'),
+            onBeforeSendHeaders: {
+              addListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestHeadersDetails,
+                ) => void | { requestHeaders?: any },
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                invokeExtension('webRequest.addOnBeforeSendHeadersListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                const wrapper = (
+                  details: chrome.webRequest.WebRequestHeadersDetails,
+                ) => {
+                  const reqId = details && (details as any).requestId
+                  Promise.resolve(callback(details)).then((result) => {
+                    if (reqId != null) {
+                      invokeExtension('webRequest.onBeforeSendHeaders.response')(
+                        reqId,
+                        result || undefined,
+                      ).catch(() => {})
+                    }
+                  })
+                }
+                onBeforeSendHeadersWrapperMap.set(callback, wrapper)
+                onBeforeSendHeadersEvent.addListener(wrapper)
+              },
+              removeListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestHeadersDetails,
+                ) => void | { requestHeaders?: any },
+              ) {
+                const wrapper = onBeforeSendHeadersWrapperMap.get(callback)
+                if (wrapper) {
+                  onBeforeSendHeadersEvent.removeListener(wrapper)
+                  onBeforeSendHeadersWrapperMap.delete(callback)
+                } else {
+                  onBeforeSendHeadersEvent.removeListener(callback as any)
+                }
+              },
+              hasListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestHeadersDetails,
+                ) => void | { requestHeaders?: any },
+              ) {
+                return onBeforeSendHeadersEvent.hasListener(
+                  onBeforeSendHeadersWrapperMap.get(callback) || (callback as any),
+                )
+              },
+              hasListeners() {
+                return onBeforeSendHeadersEvent.hasListeners()
+              },
+            },
+            onSendHeaders: {
+              addListener(
+                callback: (details: chrome.webRequest.WebRequestHeadersDetails) => void,
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                invokeExtension('webRequest.addOnSendHeadersListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                onSendHeadersEvent.addListener(callback)
+              },
+              removeListener(
+                callback: (details: chrome.webRequest.WebRequestHeadersDetails) => void,
+              ) {
+                onSendHeadersEvent.removeListener(callback)
+              },
+              hasListener(
+                callback: (details: chrome.webRequest.WebRequestHeadersDetails) => void,
+              ) {
+                return onSendHeadersEvent.hasListener(callback)
+              },
+              hasListeners() {
+                return onSendHeadersEvent.hasListeners()
+              },
+            },
+            onHeadersReceived: {
+              addListener(
+                callback: (
+                  details: chrome.webRequest.WebResponseHeadersDetails,
+                ) => void | { responseHeaders?: any },
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                invokeExtension('webRequest.addOnHeadersReceivedListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                const wrapper = (
+                  details: chrome.webRequest.WebResponseHeadersDetails,
+                ) => {
+                  const reqId = details && (details as any).requestId
+                  Promise.resolve(callback(details)).then((result) => {
+                    if (reqId != null) {
+                      invokeExtension('webRequest.onHeadersReceived.response')(
+                        reqId,
+                        result || undefined,
+                      ).catch(() => {})
+                    }
+                  })
+                }
+                onHeadersReceivedWrapperMap.set(callback, wrapper)
+                onHeadersReceivedEvent.addListener(wrapper)
+              },
+              removeListener(
+                callback: (
+                  details: chrome.webRequest.WebResponseHeadersDetails,
+                ) => void | { responseHeaders?: any },
+              ) {
+                const wrapper = onHeadersReceivedWrapperMap.get(callback)
+                if (wrapper) {
+                  onHeadersReceivedEvent.removeListener(wrapper)
+                  onHeadersReceivedWrapperMap.delete(callback)
+                } else {
+                  onHeadersReceivedEvent.removeListener(callback as any)
+                }
+              },
+              hasListener(
+                callback: (
+                  details: chrome.webRequest.WebResponseHeadersDetails,
+                ) => void | { responseHeaders?: any },
+              ) {
+                return onHeadersReceivedEvent.hasListener(
+                  onHeadersReceivedWrapperMap.get(callback) || (callback as any),
+                )
+              },
+              hasListeners() {
+                return onHeadersReceivedEvent.hasListeners()
+              },
+            },
+            onResponseStarted: {
+              addListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                invokeExtension('webRequest.addOnResponseStartedListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                onResponseStartedEvent.addListener(callback)
+              },
+              removeListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+              ) {
+                onResponseStartedEvent.removeListener(callback)
+              },
+              hasListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+              ) {
+                return onResponseStartedEvent.hasListener(callback)
+              },
+              hasListeners() {
+                return onResponseStartedEvent.hasListeners()
+              },
+            },
+            onCompleted: {
+              addListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                invokeExtension('webRequest.addOnCompletedListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                onCompletedEvent.addListener(callback)
+              },
+              removeListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+              ) {
+                onCompletedEvent.removeListener(callback)
+              },
+              hasListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+              ) {
+                return onCompletedEvent.hasListener(callback)
+              },
+              hasListeners() {
+                return onCompletedEvent.hasListeners()
+              },
+            },
+            onErrorOccurred: {
+              addListener(
+                callback: (details: chrome.webRequest.WebResponseErrorDetails) => void,
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                invokeExtension('webRequest.addOnErrorOccurredListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                onErrorOccurredEvent.addListener(callback)
+              },
+              removeListener(
+                callback: (details: chrome.webRequest.WebResponseErrorDetails) => void,
+              ) {
+                onErrorOccurredEvent.removeListener(callback)
+              },
+              hasListener(
+                callback: (details: chrome.webRequest.WebResponseErrorDetails) => void,
+              ) {
+                return onErrorOccurredEvent.hasListener(callback)
+              },
+              hasListeners() {
+                return onErrorOccurredEvent.hasListeners()
+              },
+            },
           }
         },
       },

@@ -10,6 +10,25 @@ type DocumentLifecycle = 'prerender' | 'active' | 'cached' | 'pending_deletion'
 const getFrame = (frameProcessId: number, frameRoutingId: number) =>
   electron.webFrameMain.fromId(frameProcessId, frameRoutingId)
 
+/** Safely access frame data; returns null if the frame was already disposed. */
+function withFrame<T>(
+  frame: Electron.WebFrameMain | null | undefined,
+  fn: (frame: Electron.WebFrameMain) => T,
+): T | null {
+  if (!frame) return null
+  try {
+    return fn(frame)
+  } catch (err: any) {
+    if (
+      err?.message?.includes('Render frame was disposed') ||
+      err?.message?.includes('WebFrameMain could be accessed')
+    ) {
+      return null
+    }
+    throw err
+  }
+}
+
 const getFrameId = (frame: Electron.WebFrameMain) =>
   frame === frame.top ? 0 : frame.frameTreeNodeId
 
@@ -59,7 +78,8 @@ export class WebNavigationAPI {
     tab.on('did-navigate-in-page', this.onHistoryStateUpdated.bind(this, tab))
 
     tab.on('frame-created', (_e, { frame }) => {
-      if (!frame || frame.top === frame) return
+      const isMain = withFrame(frame, (f) => f.top === f)
+      if (!frame || isMain === null || isMain) return
 
       frame.on('dom-ready', () => {
         this.onDOMContentLoaded(tab, frame)
@@ -112,16 +132,15 @@ export class WebNavigationAPI {
     tab: Electron.WebContents,
     { url, frame }: Electron.Event<Electron.WebContentsWillNavigateEventParams>,
   ) => {
-    if (!frame) return
-
-    const details: chrome.webNavigation.WebNavigationSourceCallbackDetails = {
+    const details = withFrame(frame, (f) => ({
       sourceTabId: tab.id,
-      sourceProcessId: frame ? frame.processId : -1,
-      sourceFrameId: getFrameId(frame),
+      sourceProcessId: f.processId,
+      sourceFrameId: getFrameId(f),
       url,
       tabId: tab.id,
       timeStamp: Date.now(),
-    }
+    }))
+    if (!details) return
     this.sendNavigationEvent('onCreatedNavigationTarget', details)
   }
 
@@ -134,19 +153,18 @@ export class WebNavigationAPI {
     }: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
   ) => {
     if (isSameDocument) return
-    if (!frame) return
 
-    const details: chrome.webNavigation.WebNavigationParentedCallbackDetails = {
-      frameId: getFrameId(frame),
-      frameType: getFrameType(frame),
-      documentLifecycle: getDocumentLifecycle(frame),
-      parentFrameId: getParentFrameId(frame),
-      processId: frame ? frame.processId : -1,
+    const details = withFrame(frame, (f) => ({
+      frameId: getFrameId(f),
+      frameType: getFrameType(f),
+      documentLifecycle: getDocumentLifecycle(f),
+      parentFrameId: getParentFrameId(f),
+      processId: f.processId,
       tabId: tab.id,
       timeStamp: Date.now(),
       url,
-    }
-
+    }))
+    if (!details) return
     this.sendNavigationEvent('onBeforeNavigate', details)
   }
 
@@ -161,23 +179,19 @@ export class WebNavigationAPI {
     frameRoutingId: number,
   ) => {
     const frame = getFrame(frameProcessId, frameRoutingId)
-    if (!frame) return
-
-    const details: chrome.webNavigation.WebNavigationTransitionCallbackDetails = {
-      frameId: getFrameId(frame),
-      // NOTE: workaround for property missing in type
-      ...{
-        parentFrameId: getParentFrameId(frame),
-      },
-      frameType: getFrameType(frame),
+    const details = withFrame(frame ?? null, (f) => ({
+      frameId: getFrameId(f),
+      parentFrameId: getParentFrameId(f),
+      frameType: getFrameType(f),
       transitionType: '', // TODO(mv3)
       transitionQualifiers: [], // TODO(mv3)
-      documentLifecycle: getDocumentLifecycle(frame),
+      documentLifecycle: getDocumentLifecycle(f),
       processId: frameProcessId,
       tabId: tab.id,
       timeStamp: Date.now(),
       url,
-    }
+    }))
+    if (!details) return
     this.sendNavigationEvent('onCommitted', details)
   }
 
@@ -190,36 +204,34 @@ export class WebNavigationAPI {
     frameRoutingId: number,
   ) => {
     const frame = getFrame(frameProcessId, frameRoutingId)
-    if (!frame) return
-
-    const details: chrome.webNavigation.WebNavigationTransitionCallbackDetails & {
-      parentFrameId: number
-    } = {
+    const details = withFrame(frame ?? null, (f) => ({
       transitionType: '', // TODO
       transitionQualifiers: [], // TODO
-      frameId: getFrameId(frame),
-      parentFrameId: getParentFrameId(frame),
-      frameType: getFrameType(frame),
-      documentLifecycle: getDocumentLifecycle(frame),
+      frameId: getFrameId(f),
+      parentFrameId: getParentFrameId(f),
+      frameType: getFrameType(f),
+      documentLifecycle: getDocumentLifecycle(f),
       processId: frameProcessId,
       tabId: tab.id,
       timeStamp: Date.now(),
       url,
-    }
+    }))
+    if (!details) return
     this.sendNavigationEvent('onHistoryStateUpdated', details)
   }
 
   private onDOMContentLoaded = (tab: Electron.WebContents, frame: Electron.WebFrameMain) => {
-    const details: chrome.webNavigation.WebNavigationParentedCallbackDetails = {
-      frameId: getFrameId(frame),
-      parentFrameId: getParentFrameId(frame),
-      frameType: getFrameType(frame),
-      documentLifecycle: getDocumentLifecycle(frame),
-      processId: frame.processId,
+    const details = withFrame(frame, (f) => ({
+      frameId: getFrameId(f),
+      parentFrameId: getParentFrameId(f),
+      frameType: getFrameType(f),
+      documentLifecycle: getDocumentLifecycle(f),
+      processId: f.processId,
       tabId: tab.id,
       timeStamp: Date.now(),
-      url: frame.url,
-    }
+      url: f.url,
+    }))
+    if (!details) return
     this.sendNavigationEvent('onDOMContentLoaded', details)
 
     if (!tab.isLoadingMainFrame()) {
@@ -235,19 +247,18 @@ export class WebNavigationAPI {
     frameRoutingId: number,
   ) => {
     const frame = getFrame(frameProcessId, frameRoutingId)
-    if (!frame) return
-
     const url = tab.getURL()
-    const details: chrome.webNavigation.WebNavigationParentedCallbackDetails = {
-      frameId: getFrameId(frame),
-      parentFrameId: getParentFrameId(frame),
-      frameType: getFrameType(frame),
-      documentLifecycle: getDocumentLifecycle(frame),
+    const details = withFrame(frame ?? null, (f) => ({
+      frameId: getFrameId(f),
+      parentFrameId: getParentFrameId(f),
+      frameType: getFrameType(f),
+      documentLifecycle: getDocumentLifecycle(f),
       processId: frameProcessId,
       tabId: tab.id,
       timeStamp: Date.now(),
       url,
-    }
+    }))
+    if (!details) return
     this.sendNavigationEvent('onCompleted', details)
   }
 }

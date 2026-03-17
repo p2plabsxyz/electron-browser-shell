@@ -125,7 +125,7 @@ export class ElectronChromeExtensions extends EventEmitter {
 
   private ctx: ExtensionContext
 
-  private api: {
+  api: {
     browserAction: BrowserActionAPI
     contextMenus: ContextMenusAPI
     management: ManagementAPI
@@ -278,13 +278,49 @@ export class ElectronChromeExtensions extends EventEmitter {
     return this.api.contextMenus.buildMenuItemsForParams(webContents, params)
   }
 
-  /**
-   * Notify extension listeners of a request (webRequest.onBeforeRequest).
-   * Call from the app's session.webRequest.onBeforeRequest handler after
-   * skipping file:// and chrome-extension:// URLs. Callback is invoked by the app exactly once.
-   */
-  notifyWebRequestOnBeforeRequest(details: Electron.OnBeforeRequestListenerDetails) {
-    this.api.webRequest.notifyOnBeforeRequest(details)
+  /** webRequest.onBeforeRequest bridge. */
+  notifyWebRequestOnBeforeRequest(
+    details: Electron.OnBeforeRequestListenerDetails,
+  ): Promise<{ cancel?: boolean; redirectUrl?: string }> {
+    return this.api.webRequest.notifyOnBeforeRequest(details)
+  }
+
+  /** webRequest.onBeforeSendHeaders bridge. */
+  notifyWebRequestOnBeforeSendHeaders(
+    details: Electron.OnBeforeSendHeadersListenerDetails,
+  ): Promise<{ requestHeaders?: Record<string, string | string[]> }> {
+    return this.api.webRequest.notifyOnBeforeSendHeaders(details)
+  }
+
+  /** webRequest.onSendHeaders bridge. */
+  notifyWebRequestOnSendHeaders(details: Electron.OnSendHeadersListenerDetails): Promise<void> {
+    return this.api.webRequest.notifyOnSendHeaders(details)
+  }
+
+  /** webRequest.onHeadersReceived bridge. */
+  notifyWebRequestOnHeadersReceived(
+    details: Electron.OnHeadersReceivedListenerDetails,
+  ): Promise<{ responseHeaders?: Record<string, string | string[]> }> {
+    return this.api.webRequest.notifyOnHeadersReceived(details)
+  }
+
+  /** webRequest.onResponseStarted bridge. */
+  notifyWebRequestOnResponseStarted(
+    details: Electron.OnResponseStartedListenerDetails,
+  ): Promise<void> {
+    return this.api.webRequest.notifyOnResponseStarted(details)
+  }
+
+  /** webRequest.onCompleted bridge. */
+  notifyWebRequestOnCompleted(details: Electron.OnCompletedListenerDetails): Promise<void> {
+    return this.api.webRequest.notifyOnCompleted(details)
+  }
+
+  /** webRequest.onErrorOccurred bridge. */
+  notifyWebRequestOnErrorOccurred(
+    details: Electron.OnErrorOccurredListenerDetails,
+  ): Promise<void> {
+    return this.api.webRequest.notifyOnErrorOccurred(details)
   }
 
   /**
