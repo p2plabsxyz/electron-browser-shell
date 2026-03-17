@@ -45,9 +45,9 @@ function extensionToInfo(extension: Electron.Extension): ManagementExtensionInfo
 export class ManagementAPI {
   constructor(private ctx: ExtensionContext) {
     const handle = this.ctx.router.apiHandler()
-    handle('management.getSelf', this.getSelf)
-    handle('management.getAll', this.getAll)
-    handle('management.get', this.get)
+    handle('management.getSelf', this.getSelf, { permission: 'management' })
+    handle('management.getAll', this.getAll, { permission: 'management' })
+    handle('management.get', this.get, { permission: 'management' })
   }
 
   private getSessionExtensions() {

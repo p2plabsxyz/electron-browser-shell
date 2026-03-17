@@ -464,6 +464,7 @@ export const injectExtensionAPIs = () => {
       },
 
       management: {
+        shouldInject: () => !!(manifest.permissions as string[] | undefined)?.includes('management'),
         factory: (base) => ({
           ...base,
           getSelf: invokeExtension('management.getSelf'),
@@ -745,21 +746,33 @@ export const injectExtensionAPIs = () => {
                 filter: chrome.webRequest.RequestFilter,
                 extraInfoSpec?: string[],
               ) {
-                invokeExtension('webRequest.addOnBeforeRequestListener')(
-                  filter,
-                  extraInfoSpec,
-                )
+                const existing = onBeforeRequestWrapperMap.get(callback)
+                if (existing) return
+
+                invokeExtension('webRequest.addOnBeforeRequestListener')(filter, extraInfoSpec)
+
                 const wrapper = (details: chrome.webRequest.WebRequestBodyDetails) => {
                   const reqId = details && (details as any).requestId
-                  Promise.resolve(callback(details)).then((result) => {
-                    if (reqId != null) {
-                      invokeExtension('webRequest.onBeforeRequest.response')(
-                        reqId,
-                        result || undefined,
-                      ).catch(() => {})
-                    }
-                  })
+                  Promise.resolve()
+                    .then(() => callback(details))
+                    .then((result) => {
+                      if (reqId != null) {
+                        invokeExtension('webRequest.onBeforeRequest.response')(
+                          reqId,
+                          result || undefined,
+                        ).catch(() => {})
+                      }
+                    })
+                    .catch(() => {
+                      if (reqId != null) {
+                        invokeExtension('webRequest.onBeforeRequest.response')(
+                          reqId,
+                          undefined,
+                        ).catch(() => {})
+                      }
+                    })
                 }
+
                 onBeforeRequestWrapperMap.set(callback, wrapper)
                 onBeforeRequestEvent.addListener(wrapper)
               },
@@ -772,6 +785,7 @@ export const injectExtensionAPIs = () => {
                 if (wrapper) {
                   onBeforeRequestEvent.removeListener(wrapper)
                   onBeforeRequestWrapperMap.delete(callback)
+                  invokeExtension('webRequest.removeOnBeforeRequestListener')().catch(() => {})
                 } else {
                   onBeforeRequestEvent.removeListener(callback as any)
                 }
@@ -797,23 +811,33 @@ export const injectExtensionAPIs = () => {
                 filter: chrome.webRequest.RequestFilter,
                 extraInfoSpec?: string[],
               ) {
-                invokeExtension('webRequest.addOnBeforeSendHeadersListener')(
-                  filter,
-                  extraInfoSpec,
-                )
-                const wrapper = (
-                  details: chrome.webRequest.WebRequestHeadersDetails,
-                ) => {
+                const existing = onBeforeSendHeadersWrapperMap.get(callback)
+                if (existing) return
+
+                invokeExtension('webRequest.addOnBeforeSendHeadersListener')(filter, extraInfoSpec)
+
+                const wrapper = (details: chrome.webRequest.WebRequestHeadersDetails) => {
                   const reqId = details && (details as any).requestId
-                  Promise.resolve(callback(details)).then((result) => {
-                    if (reqId != null) {
-                      invokeExtension('webRequest.onBeforeSendHeaders.response')(
-                        reqId,
-                        result || undefined,
-                      ).catch(() => {})
-                    }
-                  })
+                  Promise.resolve()
+                    .then(() => callback(details))
+                    .then((result) => {
+                      if (reqId != null) {
+                        invokeExtension('webRequest.onBeforeSendHeaders.response')(
+                          reqId,
+                          result || undefined,
+                        ).catch(() => {})
+                      }
+                    })
+                    .catch(() => {
+                      if (reqId != null) {
+                        invokeExtension('webRequest.onBeforeSendHeaders.response')(
+                          reqId,
+                          undefined,
+                        ).catch(() => {})
+                      }
+                    })
                 }
+
                 onBeforeSendHeadersWrapperMap.set(callback, wrapper)
                 onBeforeSendHeadersEvent.addListener(wrapper)
               },
@@ -826,6 +850,7 @@ export const injectExtensionAPIs = () => {
                 if (wrapper) {
                   onBeforeSendHeadersEvent.removeListener(wrapper)
                   onBeforeSendHeadersWrapperMap.delete(callback)
+                  invokeExtension('webRequest.removeOnBeforeSendHeadersListener')().catch(() => {})
                 } else {
                   onBeforeSendHeadersEvent.removeListener(callback as any)
                 }
@@ -877,23 +902,33 @@ export const injectExtensionAPIs = () => {
                 filter: chrome.webRequest.RequestFilter,
                 extraInfoSpec?: string[],
               ) {
-                invokeExtension('webRequest.addOnHeadersReceivedListener')(
-                  filter,
-                  extraInfoSpec,
-                )
-                const wrapper = (
-                  details: chrome.webRequest.WebResponseHeadersDetails,
-                ) => {
+                const existing = onHeadersReceivedWrapperMap.get(callback)
+                if (existing) return
+
+                invokeExtension('webRequest.addOnHeadersReceivedListener')(filter, extraInfoSpec)
+
+                const wrapper = (details: chrome.webRequest.WebResponseHeadersDetails) => {
                   const reqId = details && (details as any).requestId
-                  Promise.resolve(callback(details)).then((result) => {
-                    if (reqId != null) {
-                      invokeExtension('webRequest.onHeadersReceived.response')(
-                        reqId,
-                        result || undefined,
-                      ).catch(() => {})
-                    }
-                  })
+                  Promise.resolve()
+                    .then(() => callback(details))
+                    .then((result) => {
+                      if (reqId != null) {
+                        invokeExtension('webRequest.onHeadersReceived.response')(
+                          reqId,
+                          result || undefined,
+                        ).catch(() => {})
+                      }
+                    })
+                    .catch(() => {
+                      if (reqId != null) {
+                        invokeExtension('webRequest.onHeadersReceived.response')(
+                          reqId,
+                          undefined,
+                        ).catch(() => {})
+                      }
+                    })
                 }
+
                 onHeadersReceivedWrapperMap.set(callback, wrapper)
                 onHeadersReceivedEvent.addListener(wrapper)
               },
@@ -906,6 +941,7 @@ export const injectExtensionAPIs = () => {
                 if (wrapper) {
                   onHeadersReceivedEvent.removeListener(wrapper)
                   onHeadersReceivedWrapperMap.delete(callback)
+                  invokeExtension('webRequest.removeOnHeadersReceivedListener')().catch(() => {})
                 } else {
                   onHeadersReceivedEvent.removeListener(callback as any)
                 }

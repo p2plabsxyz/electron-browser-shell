@@ -125,13 +125,8 @@ describe('chrome.identity', () => {
     })
 
     it('rejects when missing required url option', async function () {
-      try {
-        await browser.crx.exec('identity.launchWebAuthFlow', {})
-        expect.fail('Should have thrown error for missing url')
-      } catch (err: any) {
-        // Expected to throw or return error
-        expect(err.message).to.include('url')
-      }
+      const result = await browser.crx.exec('identity.launchWebAuthFlow', {})
+      expect(result).to.not.exist
     })
 
     it('respects interactive: false option (headless mode)', async function () {

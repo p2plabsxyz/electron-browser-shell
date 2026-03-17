@@ -40,7 +40,7 @@ export class TabsAPI {
     handle('tabs.remove', this.remove.bind(this))
     handle('tabs.goForward', this.goForward.bind(this))
     handle('tabs.goBack', this.goBack.bind(this))
-    handle('tabs.captureVisibleTab', this.captureVisibleTab.bind(this))
+    handle('tabs.captureVisibleTab', this.captureVisibleTab.bind(this), { permission: 'tabs' })
 
     this.ctx.store.on('tab-added', this.observeTab.bind(this))
   }

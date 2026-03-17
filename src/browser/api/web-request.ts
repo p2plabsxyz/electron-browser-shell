@@ -80,6 +80,9 @@ export class WebRequestAPI {
     handle('webRequest.addOnBeforeRequestListener', this.addOnBeforeRequestListener, {
       permission: 'webRequest',
     })
+    handle('webRequest.removeOnBeforeRequestListener', this.removeOnBeforeRequestListener, {
+      permission: 'webRequest',
+    })
     handle(
       'webRequest.addOnBeforeSendHeadersListener',
       this.addOnBeforeSendHeadersListener,
@@ -87,10 +90,19 @@ export class WebRequestAPI {
         permission: 'webRequest',
       },
     )
+    handle('webRequest.removeOnBeforeSendHeadersListener', this.removeOnBeforeSendHeadersListener, {
+      permission: 'webRequest',
+    })
     handle('webRequest.addOnSendHeadersListener', this.addOnSendHeadersListener, {
       permission: 'webRequest',
     })
+    handle('webRequest.removeOnSendHeadersListener', this.removeOnSendHeadersListener, {
+      permission: 'webRequest',
+    })
     handle('webRequest.addOnHeadersReceivedListener', this.addOnHeadersReceivedListener, {
+      permission: 'webRequest',
+    })
+    handle('webRequest.removeOnHeadersReceivedListener', this.removeOnHeadersReceivedListener, {
       permission: 'webRequest',
     })
     handle(
@@ -100,7 +112,13 @@ export class WebRequestAPI {
         permission: 'webRequest',
       },
     )
+    handle('webRequest.removeOnResponseStartedListener', this.removeOnResponseStartedListener, {
+      permission: 'webRequest',
+    })
     handle('webRequest.addOnCompletedListener', this.addOnCompletedListener, {
+      permission: 'webRequest',
+    })
+    handle('webRequest.removeOnCompletedListener', this.removeOnCompletedListener, {
       permission: 'webRequest',
     })
     handle(
@@ -110,6 +128,9 @@ export class WebRequestAPI {
         permission: 'webRequest',
       },
     )
+    handle('webRequest.removeOnErrorOccurredListener', this.removeOnErrorOccurredListener, {
+      permission: 'webRequest',
+    })
 
     handle('webRequest.onBeforeRequest.response', this.handleBlockingResponse)
     handle('webRequest.onBeforeSendHeaders.response', this.handleBlockingResponse)
@@ -149,6 +170,13 @@ export class WebRequestAPI {
     })
   }
 
+  private removeOnBeforeRequestListener = ({ extension }: ExtensionEvent) => {
+    if (!extension) return
+    this.onBeforeRequestListeners = this.onBeforeRequestListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
+  }
+
   private addOnBeforeSendHeadersListener = (
     { extension }: ExtensionEvent,
     filter: { urls: string[] },
@@ -160,6 +188,13 @@ export class WebRequestAPI {
       filter: { urls: filter.urls },
       extraInfoSpec,
     })
+  }
+
+  private removeOnBeforeSendHeadersListener = ({ extension }: ExtensionEvent) => {
+    if (!extension) return
+    this.onBeforeSendHeadersListeners = this.onBeforeSendHeadersListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
   }
 
   private addOnSendHeadersListener = (
@@ -175,6 +210,13 @@ export class WebRequestAPI {
     })
   }
 
+  private removeOnSendHeadersListener = ({ extension }: ExtensionEvent) => {
+    if (!extension) return
+    this.onSendHeadersListeners = this.onSendHeadersListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
+  }
+
   private addOnHeadersReceivedListener = (
     { extension }: ExtensionEvent,
     filter: { urls: string[] },
@@ -186,6 +228,13 @@ export class WebRequestAPI {
       filter: { urls: filter.urls },
       extraInfoSpec,
     })
+  }
+
+  private removeOnHeadersReceivedListener = ({ extension }: ExtensionEvent) => {
+    if (!extension) return
+    this.onHeadersReceivedListeners = this.onHeadersReceivedListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
   }
 
   private addOnResponseStartedListener = (
@@ -201,6 +250,13 @@ export class WebRequestAPI {
     })
   }
 
+  private removeOnResponseStartedListener = ({ extension }: ExtensionEvent) => {
+    if (!extension) return
+    this.onResponseStartedListeners = this.onResponseStartedListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
+  }
+
   private addOnCompletedListener = (
     { extension }: ExtensionEvent,
     filter: { urls: string[] },
@@ -214,6 +270,13 @@ export class WebRequestAPI {
     })
   }
 
+  private removeOnCompletedListener = ({ extension }: ExtensionEvent) => {
+    if (!extension) return
+    this.onCompletedListeners = this.onCompletedListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
+  }
+
   private addOnErrorOccurredListener = (
     { extension }: ExtensionEvent,
     filter: { urls: string[] },
@@ -225,6 +288,13 @@ export class WebRequestAPI {
       filter: { urls: filter.urls },
       extraInfoSpec,
     })
+  }
+
+  private removeOnErrorOccurredListener = ({ extension }: ExtensionEvent) => {
+    if (!extension) return
+    this.onErrorOccurredListeners = this.onErrorOccurredListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
   }
 
   private handleBlockingResponse = (
@@ -320,7 +390,10 @@ export class WebRequestAPI {
     return undefined
   }
 
-  private buildDetails(details: ElectronRequestDetails): WebRequestDetails {
+  private buildDetails(
+    details: ElectronRequestDetails,
+    opts?: { includeRequestBody?: boolean },
+  ): WebRequestDetails {
     const rawWebContentsId = (details as any).webContentsId
     const tabId =
       typeof rawWebContentsId === 'number'
@@ -340,7 +413,7 @@ export class WebRequestAPI {
       type: this.normalizeResourceType(details.resourceType),
       timeStamp: details.timestamp != null ? details.timestamp : Date.now(),
       initiator: details.referrer || undefined,
-      requestBody: this.normalizeRequestBody(details),
+      requestBody: opts?.includeRequestBody ? this.normalizeRequestBody(details) : undefined,
       requestHeaders: details.requestHeaders,
       responseHeaders: details.responseHeaders,
       statusCode: details.statusCode,
@@ -370,14 +443,17 @@ export class WebRequestAPI {
     if (buffers.length === 0) return undefined
 
     const combined = Buffer.concat(buffers)
-    const uint8 = new Uint8Array(combined.buffer, combined.byteOffset, combined.byteLength)
+    const bytes = combined.buffer.slice(
+      combined.byteOffset,
+      combined.byteOffset + combined.byteLength,
+    )
 
     const body: chrome.webRequest.WebRequestBody & {
       formData?: Record<string, string[]>
     } = {
       raw: [
         {
-          bytes: uint8.buffer as ArrayBuffer,
+          bytes: bytes as ArrayBuffer,
         },
       ],
     } as any
@@ -471,10 +547,17 @@ export class WebRequestAPI {
     const url = details.url
     if (!url) return {}
 
-    const payloadBase = this.buildDetails(details as unknown as ElectronRequestDetails)
     const matching = this.findMatchingListeners(this.onBeforeRequestListeners, url)
 
     if (matching.length === 0) return {}
+
+    const wantsRequestBody = matching.some((e) => {
+      if (!Array.isArray(e.extraInfoSpec)) return false
+      return e.extraInfoSpec.includes('requestBody')
+    })
+    const payloadBase = this.buildDetails(details as unknown as ElectronRequestDetails, {
+      includeRequestBody: wantsRequestBody,
+    })
 
     const hasBlocking = matching.some((e) =>
       Array.isArray(e.extraInfoSpec) && e.extraInfoSpec.includes('blocking'),

@@ -522,7 +522,6 @@ export class BrowserActionAPI {
       activeTab = this.ctx.store.getActiveTabOfCurrentWindow()
     }
     if (!activeTab) {
-      const winId = (window as Electron.BrowserWindow).id
       const firstTab = Array.from(this.ctx.store.tabs).find(
         (t) => !t.isDestroyed() && this.ctx.store.tabToWindow.get(t) === window,
       )
