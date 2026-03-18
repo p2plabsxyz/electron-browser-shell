@@ -3,6 +3,7 @@ import { ExtensionEvent } from '../router'
 import { matchesPattern } from './common'
 
 interface ListenerEntry {
+  id: string
   extensionId: string
   filter: { urls: string[] }
   extraInfoSpec?: string[]
@@ -73,6 +74,7 @@ export class WebRequestAPI {
   private onErrorOccurredListeners: ListenerEntry[] = []
 
   private requestIdCounter = 0
+  private listenerIdCounter = 0
   private pendingBlocking = new Map<string, PendingBlockingRequest>()
 
   constructor(private ctx: ExtensionContext) {
@@ -164,6 +166,7 @@ export class WebRequestAPI {
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onBeforeRequestListeners.push({
+      id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
       filter: { urls: filter.urls },
       extraInfoSpec,
@@ -184,6 +187,7 @@ export class WebRequestAPI {
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onBeforeSendHeadersListeners.push({
+      id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
       filter: { urls: filter.urls },
       extraInfoSpec,
@@ -204,6 +208,7 @@ export class WebRequestAPI {
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onSendHeadersListeners.push({
+      id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
       filter: { urls: filter.urls },
       extraInfoSpec,
@@ -224,6 +229,7 @@ export class WebRequestAPI {
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onHeadersReceivedListeners.push({
+      id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
       filter: { urls: filter.urls },
       extraInfoSpec,
@@ -244,6 +250,7 @@ export class WebRequestAPI {
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onResponseStartedListeners.push({
+      id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
       filter: { urls: filter.urls },
       extraInfoSpec,
@@ -264,6 +271,7 @@ export class WebRequestAPI {
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onCompletedListeners.push({
+      id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
       filter: { urls: filter.urls },
       extraInfoSpec,
@@ -284,6 +292,7 @@ export class WebRequestAPI {
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onErrorOccurredListeners.push({
+      id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
       filter: { urls: filter.urls },
       extraInfoSpec,
@@ -300,11 +309,18 @@ export class WebRequestAPI {
   private handleBlockingResponse = (
     { extension }: ExtensionEvent,
     requestId: string,
-    result: WebRequestBlockingResponse | undefined,
+    listenerIdOrResult: string | WebRequestBlockingResponse | undefined,
+    maybeResult?: WebRequestBlockingResponse,
   ) => {
     const pending = this.pendingBlocking.get(requestId)
     if (!pending) return
-    pending.results.set(extension.id, result || {})
+    // New signature: (requestId, listenerId, result). Backwards compatible with (requestId, result).
+    const listenerId =
+      typeof listenerIdOrResult === 'string' ? listenerIdOrResult : extension.id
+    const result =
+      typeof listenerIdOrResult === 'string' ? maybeResult : listenerIdOrResult
+
+    pending.results.set(listenerId, result || {})
     if (pending.results.size >= pending.expectedCount) {
       this.settlePending(requestId)
     }
@@ -585,7 +601,6 @@ export class WebRequestAPI {
     const blockingEntries = matching.filter(
       (e) => Array.isArray(e.extraInfoSpec) && e.extraInfoSpec.includes('blocking'),
     )
-    const expectedExtensionCount = new Set(blockingEntries.map((e) => e.extensionId)).size
 
     return new Promise<WebRequestBlockingResponse>((resolve) => {
       const timeoutHandle = setTimeout(() => {
@@ -595,22 +610,24 @@ export class WebRequestAPI {
       this.pendingBlocking.set(requestId, {
         resolve,
         results: new Map(),
-        // Wait for one response per extension, not per listener entry.
-        expectedCount: expectedExtensionCount,
+        expectedCount: blockingEntries.length,
         timeoutHandle,
         merge: (results) => this.mergeCancelOrRedirect(results as Map<string, WebRequestBlockingResponse>),
       })
 
       for (const entry of matching) {
+        const isBlocking =
+          Array.isArray(entry.extraInfoSpec) && entry.extraInfoSpec.includes('blocking')
+
+        const toSend = isBlocking
+          ? ({ ...payloadWithId, listenerId: entry.id } as any)
+          : payloadBase
+
         const filtered = this.filterDetailsForListener(
-          payloadWithId,
+          toSend,
           entry.extraInfoSpec,
         )
-        this.ctx.router.sendEvent(
-          entry.extensionId,
-          'webRequest.onBeforeRequest',
-          filtered,
-        )
+        this.ctx.router.sendEvent(entry.extensionId, 'webRequest.onBeforeRequest', filtered)
       }
     })
   }
@@ -658,7 +675,6 @@ export class WebRequestAPI {
       if (!Array.isArray(e.extraInfoSpec)) return false
       return e.extraInfoSpec.includes('blocking') || e.extraInfoSpec.includes('requestHeaders')
     })
-    const expectedExtensionCount = new Set(blockingEntries.map((e) => e.extensionId)).size
 
     return new Promise<{ requestHeaders?: Record<string, string | string[]> }>((resolve) => {
       const timeoutHandle = setTimeout(() => {
@@ -668,23 +684,23 @@ export class WebRequestAPI {
       this.pendingBlocking.set(requestId, {
         resolve,
         results: new Map(),
-        // Wait for one response per extension, not per listener entry.
-        expectedCount: expectedExtensionCount,
+        expectedCount: blockingEntries.length,
         timeoutHandle,
         merge: (results) =>
           this.mergeRequestHeaders(details.requestHeaders as any, results),
       })
 
       for (const entry of matching) {
-        const filtered = this.filterDetailsForListener(
-          payloadWithId,
-          entry.extraInfoSpec,
-        )
-        this.ctx.router.sendEvent(
-          entry.extensionId,
-          'webRequest.onBeforeSendHeaders',
-          filtered,
-        )
+        const isBlocking = Array.isArray(entry.extraInfoSpec)
+          ? entry.extraInfoSpec.includes('blocking') || entry.extraInfoSpec.includes('requestHeaders')
+          : false
+
+        const toSend = isBlocking
+          ? ({ ...payloadWithId, listenerId: entry.id } as any)
+          : payloadBase
+
+        const filtered = this.filterDetailsForListener(toSend, entry.extraInfoSpec)
+        this.ctx.router.sendEvent(entry.extensionId, 'webRequest.onBeforeSendHeaders', filtered)
       }
     })
   }
@@ -758,7 +774,6 @@ export class WebRequestAPI {
       if (!Array.isArray(e.extraInfoSpec)) return false
       return e.extraInfoSpec.includes('blocking') || e.extraInfoSpec.includes('responseHeaders')
     })
-    const expectedExtensionCount = new Set(blockingEntries.map((e) => e.extensionId)).size
 
     return new Promise<{ responseHeaders?: Record<string, string | string[]> }>((resolve) => {
       const timeoutHandle = setTimeout(() => {
@@ -768,23 +783,23 @@ export class WebRequestAPI {
       this.pendingBlocking.set(requestId, {
         resolve,
         results: new Map(),
-        // Wait for one response per extension, not per listener entry.
-        expectedCount: expectedExtensionCount,
+        expectedCount: blockingEntries.length,
         timeoutHandle,
         merge: (results) =>
           this.mergeResponseHeaders(details.responseHeaders as any, results),
       })
 
       for (const entry of matching) {
-        const filtered = this.filterDetailsForListener(
-          payloadWithId,
-          entry.extraInfoSpec,
-        )
-        this.ctx.router.sendEvent(
-          entry.extensionId,
-          'webRequest.onHeadersReceived',
-          filtered,
-        )
+        const isBlocking = Array.isArray(entry.extraInfoSpec)
+          ? entry.extraInfoSpec.includes('blocking') || entry.extraInfoSpec.includes('responseHeaders')
+          : false
+
+        const toSend = isBlocking
+          ? ({ ...payloadWithId, listenerId: entry.id } as any)
+          : payloadBase
+
+        const filtered = this.filterDetailsForListener(toSend, entry.extraInfoSpec)
+        this.ctx.router.sendEvent(entry.extensionId, 'webRequest.onHeadersReceived', filtered)
       }
     })
   }

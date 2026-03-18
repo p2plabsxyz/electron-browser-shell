@@ -44,24 +44,23 @@ export const addExtensionListener = (extensionId: string, name: string, callback
 }
 
 export const removeExtensionListener = (extensionId: string, name: string, callback: any) => {
-  if (listenerMap.has(name)) {
-    const listenerCount = listenerMap.get(name) || 0
-
-    if (listenerCount <= 1) {
-      listenerMap.delete(name)
-
-      ipcRenderer.send('crx-remove-listener', extensionId, name)
-    } else {
-      listenerMap.set(name, listenerCount - 1)
-    }
-  }
-
   // Use the stored wrapper so we remove the right function reference from ipcRenderer.
   const callbackMap = callbackWrapperMap.get(name)
   const wrapper = callbackMap && callbackMap.get(callback)
   if (wrapper) {
     ipcRenderer.removeListener(formatIpcName(name), wrapper)
     callbackMap!.delete(callback)
+    // Only decrement counts / detach global IPC subscription if this callback was actually registered.
+    if (listenerMap.has(name)) {
+      const listenerCount = listenerMap.get(name) || 0
+
+      if (listenerCount <= 1) {
+        listenerMap.delete(name)
+        ipcRenderer.send('crx-remove-listener', extensionId, name)
+      } else {
+        listenerMap.set(name, listenerCount - 1)
+      }
+    }
   } else {
     ipcRenderer.removeListener(formatIpcName(name), callback)
   }

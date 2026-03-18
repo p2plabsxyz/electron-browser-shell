@@ -133,7 +133,7 @@ export const injectExtensionAPIs = () => {
         electron.addExtensionListener(extensionId, this.name, callback)
       }
       removeListener(callback: T) {
-        this.listeners.delete(callback)
+        if (!this.listeners.delete(callback)) return
         electron.removeExtensionListener(extensionId, this.name, callback)
       }
 
@@ -753,12 +753,14 @@ export const injectExtensionAPIs = () => {
 
                 const wrapper = (details: chrome.webRequest.WebRequestBodyDetails) => {
                   const reqId = details && (details as any).requestId
+                  const listenerId = details && (details as any).listenerId
                   Promise.resolve()
                     .then(() => callback(details))
                     .then((result) => {
                       if (reqId != null) {
                         invokeExtension('webRequest.onBeforeRequest.response')(
                           reqId,
+                          listenerId,
                           result || undefined,
                         ).catch(() => {})
                       }
@@ -767,6 +769,7 @@ export const injectExtensionAPIs = () => {
                       if (reqId != null) {
                         invokeExtension('webRequest.onBeforeRequest.response')(
                           reqId,
+                          listenerId,
                           undefined,
                         ).catch(() => {})
                       }
@@ -820,12 +823,14 @@ export const injectExtensionAPIs = () => {
 
                 const wrapper = (details: chrome.webRequest.WebRequestHeadersDetails) => {
                   const reqId = details && (details as any).requestId
+                  const listenerId = details && (details as any).listenerId
                   Promise.resolve()
                     .then(() => callback(details))
                     .then((result) => {
                       if (reqId != null) {
                         invokeExtension('webRequest.onBeforeSendHeaders.response')(
                           reqId,
+                          listenerId,
                           result || undefined,
                         ).catch(() => {})
                       }
@@ -834,6 +839,7 @@ export const injectExtensionAPIs = () => {
                       if (reqId != null) {
                         invokeExtension('webRequest.onBeforeSendHeaders.response')(
                           reqId,
+                          listenerId,
                           undefined,
                         ).catch(() => {})
                       }
@@ -916,12 +922,14 @@ export const injectExtensionAPIs = () => {
 
                 const wrapper = (details: chrome.webRequest.WebResponseHeadersDetails) => {
                   const reqId = details && (details as any).requestId
+                  const listenerId = details && (details as any).listenerId
                   Promise.resolve()
                     .then(() => callback(details))
                     .then((result) => {
                       if (reqId != null) {
                         invokeExtension('webRequest.onHeadersReceived.response')(
                           reqId,
+                          listenerId,
                           result || undefined,
                         ).catch(() => {})
                       }
@@ -930,6 +938,7 @@ export const injectExtensionAPIs = () => {
                       if (reqId != null) {
                         invokeExtension('webRequest.onHeadersReceived.response')(
                           reqId,
+                          listenerId,
                           undefined,
                         ).catch(() => {})
                       }

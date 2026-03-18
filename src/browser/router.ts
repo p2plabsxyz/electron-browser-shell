@@ -433,6 +433,7 @@ export class ExtensionRouter {
     }
 
     const deadListeners: EventListener[] = []
+    let matchedCount = 0
     let sentCount = 0
     for (const listener of eventListeners) {
       const { type, extensionId } = listener
@@ -440,6 +441,7 @@ export class ExtensionRouter {
       if (targetExtensionId && targetExtensionId !== extensionId) {
         continue
       }
+      matchedCount++
 
       if (type === 'service-worker') {
         const scope = `chrome-extension://${extensionId}/`
@@ -451,6 +453,7 @@ export class ExtensionRouter {
               if (!serviceWorker || (serviceWorker as any).isDestroyed?.()) return
               try {
                 serviceWorker.send(ipcName, ...argsCopy)
+                sentCount++
               } catch (err) {
                 d('service worker send failed for %s: %o', eventName, err)
               }
@@ -460,7 +463,6 @@ export class ExtensionRouter {
             d('failed to send %s to %s', eventName, extensionId)
             console.error(error)
           })
-        sentCount++
       } else {
         if (listener.host.isDestroyed()) {
           deadListeners.push(listener)
@@ -487,7 +489,8 @@ export class ExtensionRouter {
       d(`removed ${deadListeners.length} dead listener(s) for '${eventName}'`)
     }
 
-    if (sentCount === 0 && targetExtensionId) {
+    // Only fall back when we did not match any listener for the target extension.
+    if (matchedCount === 0 && targetExtensionId) {
       this.deliverToTargetExtensionWhenNoListener(targetExtensionId, eventName, ipcName, args)
     }
 
@@ -520,7 +523,11 @@ export class ExtensionRouter {
         if (!serviceWorker || (serviceWorker as any).isDestroyed?.()) return
         setTimeout(() => {
           if (!serviceWorker || (serviceWorker as any).isDestroyed?.()) return
-          serviceWorker.send(ipcName, ...argsCopy)
+          try {
+            serviceWorker.send(ipcName, ...argsCopy)
+          } catch (err) {
+            d('service worker send failed for %s: %o', eventName, err)
+          }
         }, 400)
       })
       .catch((err) => {
