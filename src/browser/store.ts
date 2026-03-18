@@ -251,6 +251,7 @@ export class ExtensionStore extends EventEmitter {
 
     const cached = this.tabDetailsCache.get(tab.id)
     const cachedId = cached && typeof cached.id === 'number' ? cached.id : undefined
-    return typeof cachedId === 'number' ? cachedId : -1
+    // tab.id is the WebContents id, so fallback to that if cache isn't ready yet.
+    return typeof cachedId === 'number' ? cachedId : tab.id
   }
 }
