@@ -54,7 +54,12 @@ export class StorageSyncAPI {
 
   private save = async (extensionId: string, data: Record<string, any>) => {
     await this.ready
-    const json = JSON.stringify(data)
+    let json: string
+    try {
+      json = JSON.stringify(data)
+    } catch (err) {
+      throw new Error('Value is not JSON-serializable')
+    }
     const content = safeStorage.isEncryptionAvailable()
       ? safeStorage.encryptString(json)
       : json
@@ -84,10 +89,21 @@ export class StorageSyncAPI {
     const data = await this.load(extension.id)
     const changes: Record<string, chrome.storage.StorageChange> = {}
 
+    if (!items || typeof items !== 'object' || Array.isArray(items)) {
+      throw new Error('Invalid items')
+    }
+
     Object.entries(items).forEach(([k, v]) => {
-      const same = typeof v === 'object' && v !== null
-        ? JSON.stringify(data[k]) === JSON.stringify(v)
-        : data[k] === v
+      let same = false
+      if (typeof v === 'object' && v !== null) {
+        try {
+          same = JSON.stringify(data[k]) === JSON.stringify(v)
+        } catch {
+          same = false
+        }
+      } else {
+        same = data[k] === v
+      }
       if (!same) {
         changes[k] = { newValue: v }
         if (k in data) changes[k].oldValue = data[k]

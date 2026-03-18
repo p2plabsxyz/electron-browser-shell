@@ -757,7 +757,7 @@ export const injectExtensionAPIs = () => {
                   Promise.resolve()
                     .then(() => callback(details))
                     .then((result) => {
-                      if (reqId != null) {
+                      if (reqId != null && listenerId != null) {
                         invokeExtension('webRequest.onBeforeRequest.response')(
                           reqId,
                           listenerId,
@@ -766,7 +766,7 @@ export const injectExtensionAPIs = () => {
                       }
                     })
                     .catch(() => {
-                      if (reqId != null) {
+                      if (reqId != null && listenerId != null) {
                         invokeExtension('webRequest.onBeforeRequest.response')(
                           reqId,
                           listenerId,
@@ -827,7 +827,7 @@ export const injectExtensionAPIs = () => {
                   Promise.resolve()
                     .then(() => callback(details))
                     .then((result) => {
-                      if (reqId != null) {
+                      if (reqId != null && listenerId != null) {
                         invokeExtension('webRequest.onBeforeSendHeaders.response')(
                           reqId,
                           listenerId,
@@ -836,7 +836,7 @@ export const injectExtensionAPIs = () => {
                       }
                     })
                     .catch(() => {
-                      if (reqId != null) {
+                      if (reqId != null && listenerId != null) {
                         invokeExtension('webRequest.onBeforeSendHeaders.response')(
                           reqId,
                           listenerId,
@@ -926,7 +926,7 @@ export const injectExtensionAPIs = () => {
                   Promise.resolve()
                     .then(() => callback(details))
                     .then((result) => {
-                      if (reqId != null) {
+                      if (reqId != null && listenerId != null) {
                         invokeExtension('webRequest.onHeadersReceived.response')(
                           reqId,
                           listenerId,
@@ -935,7 +935,7 @@ export const injectExtensionAPIs = () => {
                       }
                     })
                     .catch(() => {
-                      if (reqId != null) {
+                      if (reqId != null && listenerId != null) {
                         invokeExtension('webRequest.onHeadersReceived.response')(
                           reqId,
                           listenerId,

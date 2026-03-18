@@ -165,6 +165,12 @@ export class WebRequestAPI {
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
+    const wantsBlocking =
+      Array.isArray(extraInfoSpec) && extraInfoSpec.includes('blocking')
+    if (wantsBlocking) {
+      const perms = (extension.manifest?.permissions || []) as string[]
+      if (!perms.includes('webRequestBlocking')) return
+    }
     this.onBeforeRequestListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -186,6 +192,12 @@ export class WebRequestAPI {
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
+    const wantsBlocking =
+      Array.isArray(extraInfoSpec) && extraInfoSpec.includes('blocking')
+    if (wantsBlocking) {
+      const perms = (extension.manifest?.permissions || []) as string[]
+      if (!perms.includes('webRequestBlocking')) return
+    }
     this.onBeforeSendHeadersListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -228,6 +240,12 @@ export class WebRequestAPI {
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
+    const wantsBlocking =
+      Array.isArray(extraInfoSpec) && extraInfoSpec.includes('blocking')
+    if (wantsBlocking) {
+      const perms = (extension.manifest?.permissions || []) as string[]
+      if (!perms.includes('webRequestBlocking')) return
+    }
     this.onHeadersReceivedListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -649,7 +667,7 @@ export class WebRequestAPI {
 
     const hasBlocking = matching.some((e) => {
       if (!Array.isArray(e.extraInfoSpec)) return false
-      return e.extraInfoSpec.includes('blocking') || e.extraInfoSpec.includes('requestHeaders')
+      return e.extraInfoSpec.includes('blocking')
     })
 
     if (!hasBlocking) {
@@ -673,7 +691,7 @@ export class WebRequestAPI {
 
     const blockingEntries = matching.filter((e) => {
       if (!Array.isArray(e.extraInfoSpec)) return false
-      return e.extraInfoSpec.includes('blocking') || e.extraInfoSpec.includes('requestHeaders')
+      return e.extraInfoSpec.includes('blocking')
     })
 
     return new Promise<{ requestHeaders?: Record<string, string | string[]> }>((resolve) => {
@@ -692,7 +710,7 @@ export class WebRequestAPI {
 
       for (const entry of matching) {
         const isBlocking = Array.isArray(entry.extraInfoSpec)
-          ? entry.extraInfoSpec.includes('blocking') || entry.extraInfoSpec.includes('requestHeaders')
+          ? entry.extraInfoSpec.includes('blocking')
           : false
 
         const toSend = isBlocking
@@ -748,7 +766,7 @@ export class WebRequestAPI {
 
     const hasBlocking = matching.some((e) => {
       if (!Array.isArray(e.extraInfoSpec)) return false
-      return e.extraInfoSpec.includes('blocking') || e.extraInfoSpec.includes('responseHeaders')
+      return e.extraInfoSpec.includes('blocking')
     })
 
     if (!hasBlocking) {
@@ -772,7 +790,7 @@ export class WebRequestAPI {
 
     const blockingEntries = matching.filter((e) => {
       if (!Array.isArray(e.extraInfoSpec)) return false
-      return e.extraInfoSpec.includes('blocking') || e.extraInfoSpec.includes('responseHeaders')
+      return e.extraInfoSpec.includes('blocking')
     })
 
     return new Promise<{ responseHeaders?: Record<string, string | string[]> }>((resolve) => {
@@ -791,7 +809,7 @@ export class WebRequestAPI {
 
       for (const entry of matching) {
         const isBlocking = Array.isArray(entry.extraInfoSpec)
-          ? entry.extraInfoSpec.includes('blocking') || entry.extraInfoSpec.includes('responseHeaders')
+          ? entry.extraInfoSpec.includes('blocking')
           : false
 
         const toSend = isBlocking

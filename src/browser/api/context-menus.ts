@@ -304,11 +304,12 @@ export class ContextMenusAPI {
 
   private update = (
     { extension }: ExtensionEvent,
-    menuItemId: string,
+    menuItemId: string | number,
     updateProperties: chrome.contextMenus.UpdateProperties,
   ) => {
+    const id = String(menuItemId)
     const items = this.menus.get(extension.id)
-    const existing = items?.get(menuItemId)
+    const existing = items?.get(id)
     if (!existing) return
 
     const updatable: (keyof chrome.contextMenus.UpdateProperties)[] = [
@@ -332,10 +333,11 @@ export class ContextMenusAPI {
     }
   }
 
-  private remove = ({ extension }: ExtensionEvent, menuItemId: string) => {
+  private remove = ({ extension }: ExtensionEvent, menuItemId: string | number) => {
+    const id = String(menuItemId)
     const items = this.menus.get(extension.id)
-    if (items && items.has(menuItemId)) {
-      items.delete(menuItemId)
+    if (items && items.has(id)) {
+      items.delete(id)
       if (items.size === 0) {
         this.menus.delete(extension.id)
       }
