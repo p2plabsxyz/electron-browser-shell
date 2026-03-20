@@ -1,4 +1,4 @@
-import { session as electronSession } from 'electron'
+import { app, session as electronSession } from 'electron'
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
@@ -25,6 +25,7 @@ import { ExtensionRouter } from './router'
 import { checkLicense, License } from './license'
 import { readLoadedExtensionManifest } from './manifest'
 import { PermissionsAPI } from './api/permissions'
+import { ProxyAPI } from './api/proxy'
 import { resolvePartition } from './partition'
 
 function checkVersion() {
@@ -136,6 +137,7 @@ export class ElectronChromeExtensions extends EventEmitter {
     identity: IdentityAPI
     notifications: NotificationsAPI
     permissions: PermissionsAPI
+    proxy: ProxyAPI
     runtime: RuntimeAPI
     storageSync: StorageSyncAPI
     tabs: TabsAPI
@@ -178,6 +180,7 @@ export class ElectronChromeExtensions extends EventEmitter {
       identity: new IdentityAPI(this.ctx),
       notifications: new NotificationsAPI(this.ctx),
       permissions: new PermissionsAPI(this.ctx),
+      proxy: new ProxyAPI(this.ctx),
       runtime: new RuntimeAPI(this.ctx),
       storageSync: new StorageSyncAPI(this.ctx),
       tabs: new TabsAPI(this.ctx),
@@ -186,7 +189,46 @@ export class ElectronChromeExtensions extends EventEmitter {
     }
 
     this.listenForExtensions()
+    this.listenForAuthRequired()
     this.prependPreload(opts.modulePath)
+  }
+
+  private listenForAuthRequired() {
+    app.on('login', async (event, webContents, request, authInfo, callback) => {
+      if (!webContents || webContents.session !== this.ctx.session) return
+
+      event.preventDefault()
+
+      try {
+        const result = await this.api.webRequest.notifyOnAuthRequired({
+          id: (request as any)?.id,
+          url: request.url,
+          method: (request as any)?.method,
+          webContentsId: webContents.id,
+          timestamp: Date.now(),
+          isProxy: authInfo.isProxy,
+          scheme: authInfo.scheme,
+          realm: authInfo.realm,
+          challenger: {
+            host: authInfo.host,
+            port: authInfo.port,
+          },
+        })
+
+        if (result.cancel) {
+          callback()
+          return
+        }
+
+        const credentials = result.authCredentials
+        if (credentials?.username || credentials?.password) {
+          callback(credentials.username || '', credentials.password || '')
+          return
+        }
+      } catch {}
+
+      callback()
+    })
   }
 
   private listenForExtensions() {

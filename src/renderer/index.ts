@@ -561,6 +561,21 @@ export const injectExtensionAPIs = () => {
         },
       },
 
+      proxy: {
+        shouldInject: () => !!(manifest.permissions as string[] | undefined)?.includes('proxy'),
+        factory: (base) => {
+          return {
+            ...base,
+            settings: {
+              get: invokeExtension('proxy.settings.get'),
+              set: invokeExtension('proxy.settings.set'),
+              clear: invokeExtension('proxy.settings.clear'),
+              onChange: new ExtensionEvent('proxy.settings.onChange'),
+            },
+          }
+        },
+      },
+
       runtime: {
         factory: (base) => {
           const patched: any = {}
@@ -766,6 +781,20 @@ export const injectExtensionAPIs = () => {
           const onErrorOccurredEvent = new ExtensionEvent<
             (details: chrome.webRequest.WebResponseErrorDetails) => void
           >('webRequest.onErrorOccurred')
+
+          const onAuthRequiredEvent = new ExtensionEvent<
+            (
+              details: chrome.webRequest.WebAuthenticationChallengeDetails,
+              asyncCallback?: (response?: chrome.webRequest.BlockingResponse) => void,
+            ) => void | chrome.webRequest.BlockingResponse
+          >('webRequest.onAuthRequired')
+          const onAuthRequiredWrapperMap = new Map<
+            (
+              details: chrome.webRequest.WebAuthenticationChallengeDetails,
+              asyncCallback?: (response?: chrome.webRequest.BlockingResponse) => void,
+            ) => void | chrome.webRequest.BlockingResponse,
+            (details: chrome.webRequest.WebAuthenticationChallengeDetails) => void
+          >()
 
           return {
             ...base,
@@ -1093,6 +1122,102 @@ export const injectExtensionAPIs = () => {
               },
               hasListeners() {
                 return onErrorOccurredEvent.hasListeners()
+              },
+            },
+            onAuthRequired: {
+              addListener(
+                callback: (
+                  details: chrome.webRequest.WebAuthenticationChallengeDetails,
+                  asyncCallback?: (response?: chrome.webRequest.BlockingResponse) => void,
+                ) => void | chrome.webRequest.BlockingResponse,
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                const existing = onAuthRequiredWrapperMap.get(callback)
+                if (existing) return
+
+                invokeExtension('webRequest.addOnAuthRequiredListener')(filter, extraInfoSpec)
+
+                const wrapper = (details: chrome.webRequest.WebAuthenticationChallengeDetails) => {
+                  const reqId = details && (details as any).requestId
+                  const listenerId = details && (details as any).listenerId
+                  const send = (result?: chrome.webRequest.BlockingResponse | void) => {
+                    if (reqId != null && listenerId != null) {
+                      invokeExtension('webRequest.onAuthRequired.response')(
+                        reqId,
+                        listenerId,
+                        result || undefined,
+                      ).catch(() => {})
+                    }
+                  }
+
+                  const usesAsyncBlocking =
+                    Array.isArray(extraInfoSpec) && extraInfoSpec.includes('asyncBlocking')
+
+                  if (usesAsyncBlocking) {
+                    let responded = false
+                    const asyncCallback = (result?: chrome.webRequest.BlockingResponse) => {
+                      if (responded) return
+                      responded = true
+                      send(result)
+                    }
+
+                    Promise.resolve()
+                      .then(() => callback(details, asyncCallback))
+                      .then((result) => {
+                        if (!responded && result !== undefined) {
+                          responded = true
+                          send(result)
+                        }
+                      })
+                      .catch(() => {
+                        if (!responded) {
+                          responded = true
+                          send(undefined)
+                        }
+                      })
+
+                    return
+                  }
+
+                  Promise.resolve()
+                    .then(() => callback(details))
+                    .then((result) => send(result))
+                    .catch(() => send(undefined))
+                }
+
+                onAuthRequiredWrapperMap.set(callback, wrapper)
+                onAuthRequiredEvent.addListener(wrapper)
+              },
+              removeListener(
+                callback: (
+                  details: chrome.webRequest.WebAuthenticationChallengeDetails,
+                  asyncCallback?: (response?: chrome.webRequest.BlockingResponse) => void,
+                ) => void | chrome.webRequest.BlockingResponse,
+              ) {
+                const wrapper = onAuthRequiredWrapperMap.get(callback)
+                if (wrapper) {
+                  onAuthRequiredEvent.removeListener(wrapper)
+                  onAuthRequiredWrapperMap.delete(callback)
+                  if (!onAuthRequiredEvent.hasListeners()) {
+                    invokeExtension('webRequest.removeOnAuthRequiredListener')().catch(() => {})
+                  }
+                } else {
+                  onAuthRequiredEvent.removeListener(callback as any)
+                }
+              },
+              hasListener(
+                callback: (
+                  details: chrome.webRequest.WebAuthenticationChallengeDetails,
+                  asyncCallback?: (response?: chrome.webRequest.BlockingResponse) => void,
+                ) => void | chrome.webRequest.BlockingResponse,
+              ) {
+                return onAuthRequiredEvent.hasListener(
+                  onAuthRequiredWrapperMap.get(callback) || (callback as any),
+                )
+              },
+              hasListeners() {
+                return onAuthRequiredEvent.hasListeners()
               },
             },
           }

@@ -14,6 +14,10 @@ export interface WebRequestBlockingResponse {
   redirectUrl?: string
   requestHeaders?: Record<string, string | string[]>
   responseHeaders?: Record<string, string | string[]>
+  authCredentials?: {
+    username: string
+    password: string
+  }
 }
 
 export interface WebRequestDetails {
@@ -33,6 +37,13 @@ export interface WebRequestDetails {
   ip?: string
   fromCache?: boolean
   error?: string
+  isProxy?: boolean
+  scheme?: string
+  realm?: string
+  challenger?: {
+    host: string
+    port: number
+  }
 }
 
 interface ElectronRequestDetails {
@@ -52,6 +63,13 @@ interface ElectronRequestDetails {
   fromCache?: boolean
   error?: string
   ip?: string
+  isProxy?: boolean
+  scheme?: string
+  realm?: string
+  challenger?: {
+    host: string
+    port: number
+  }
 }
 
 interface PendingBlockingRequest<T = WebRequestBlockingResponse> {
@@ -72,6 +90,7 @@ export class WebRequestAPI {
   private onResponseStartedListeners: ListenerEntry[] = []
   private onCompletedListeners: ListenerEntry[] = []
   private onErrorOccurredListeners: ListenerEntry[] = []
+  private onAuthRequiredListeners: ListenerEntry[] = []
 
   private requestIdCounter = 0
   private listenerIdCounter = 0
@@ -133,10 +152,17 @@ export class WebRequestAPI {
     handle('webRequest.removeOnErrorOccurredListener', this.removeOnErrorOccurredListener, {
       permission: 'webRequest',
     })
+    handle('webRequest.addOnAuthRequiredListener', this.addOnAuthRequiredListener, {
+      permission: 'webRequest',
+    })
+    handle('webRequest.removeOnAuthRequiredListener', this.removeOnAuthRequiredListener, {
+      permission: 'webRequest',
+    })
 
     handle('webRequest.onBeforeRequest.response', this.handleBlockingResponse)
     handle('webRequest.onBeforeSendHeaders.response', this.handleBlockingResponse)
     handle('webRequest.onHeadersReceived.response', this.handleBlockingResponse)
+    handle('webRequest.onAuthRequired.response', this.handleBlockingResponse)
 
     const sessionExtensions = this.ctx.session.extensions || this.ctx.session
     sessionExtensions.on('extension-unloaded', (_event, extension) => {
@@ -154,6 +180,9 @@ export class WebRequestAPI {
       )
       this.onCompletedListeners = this.onCompletedListeners.filter((e) => e.extensionId !== id)
       this.onErrorOccurredListeners = this.onErrorOccurredListeners.filter(
+        (e) => e.extensionId !== id,
+      )
+      this.onAuthRequiredListeners = this.onAuthRequiredListeners.filter(
         (e) => e.extensionId !== id,
       )
     })
@@ -324,6 +353,36 @@ export class WebRequestAPI {
     )
   }
 
+  private addOnAuthRequiredListener = (
+    { extension }: ExtensionEvent,
+    filter: { urls: string[] },
+    extraInfoSpec?: string[],
+  ) => {
+    if (!filter?.urls || !Array.isArray(filter.urls)) return
+
+    const wantsBlocking =
+      Array.isArray(extraInfoSpec) &&
+      (extraInfoSpec.includes('blocking') || extraInfoSpec.includes('asyncBlocking'))
+    if (wantsBlocking) {
+      const perms = (extension.manifest?.permissions || []) as string[]
+      if (!perms.includes('webRequestBlocking')) return
+    }
+
+    this.onAuthRequiredListeners.push({
+      id: `wr-${++this.listenerIdCounter}`,
+      extensionId: extension.id,
+      filter: { urls: filter.urls },
+      extraInfoSpec,
+    })
+  }
+
+  private removeOnAuthRequiredListener = ({ extension }: ExtensionEvent) => {
+    if (!extension) return
+    this.onAuthRequiredListeners = this.onAuthRequiredListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
+  }
+
   private handleBlockingResponse = (
     { extension }: ExtensionEvent,
     requestId: string,
@@ -361,6 +420,25 @@ export class WebRequestAPI {
     }
     for (const r of results.values()) {
       if (r.redirectUrl && r.redirectUrl.length > 0) return { redirectUrl: r.redirectUrl }
+    }
+    return {}
+  }
+
+  private mergeAuthRequired(
+    results: Map<string, WebRequestBlockingResponse>,
+  ): WebRequestBlockingResponse {
+    for (const r of results.values()) {
+      if (r.cancel === true) return { cancel: true }
+    }
+    for (const r of results.values()) {
+      if (r.authCredentials?.username != null || r.authCredentials?.password != null) {
+        return {
+          authCredentials: {
+            username: r.authCredentials?.username || '',
+            password: r.authCredentials?.password || '',
+          },
+        }
+      }
     }
     return {}
   }
@@ -454,6 +532,10 @@ export class WebRequestAPI {
       ip: details.ip,
       fromCache: details.fromCache,
       error: details.error,
+      isProxy: details.isProxy,
+      scheme: details.scheme,
+      realm: details.realm,
+      challenger: details.challenger,
     }
   }
 
@@ -905,5 +987,64 @@ export class WebRequestAPI {
         filtered,
       )
     }
+  }
+
+  async notifyOnAuthRequired(
+    details: ElectronRequestDetails,
+  ): Promise<{ cancel?: boolean; authCredentials?: { username: string; password: string } }> {
+    const url = details.url
+    if (!url) return {}
+
+    const payloadBase = this.buildDetails(details)
+    const matching = this.findMatchingListeners(this.onAuthRequiredListeners, url)
+    if (matching.length === 0) return {}
+
+    const hasBlocking = matching.some((e) => {
+      if (!Array.isArray(e.extraInfoSpec)) return false
+      return e.extraInfoSpec.includes('blocking') || e.extraInfoSpec.includes('asyncBlocking')
+    })
+
+    if (!hasBlocking) {
+      for (const entry of matching) {
+        const filtered = this.filterDetailsForListener(payloadBase, entry.extraInfoSpec)
+        this.ctx.router.sendEvent(entry.extensionId, 'webRequest.onAuthRequired', filtered)
+      }
+      return {}
+    }
+
+    const requestId = payloadBase.requestId || `wr-${++this.requestIdCounter}`
+    const payloadWithId: WebRequestDetails = { ...payloadBase, requestId }
+
+    const blockingEntries = matching.filter((e) => {
+      if (!Array.isArray(e.extraInfoSpec)) return false
+      return e.extraInfoSpec.includes('blocking') || e.extraInfoSpec.includes('asyncBlocking')
+    })
+
+    return new Promise<{ cancel?: boolean; authCredentials?: { username: string; password: string } }>((resolve) => {
+      const timeoutHandle = setTimeout(() => {
+        this.settlePending(requestId)
+      }, BLOCKING_RESPONSE_TIMEOUT_MS)
+
+      this.pendingBlocking.set(requestId, {
+        resolve,
+        results: new Map(),
+        expectedCount: blockingEntries.length,
+        timeoutHandle,
+        merge: (results) => this.mergeAuthRequired(results as Map<string, WebRequestBlockingResponse>),
+      })
+
+      for (const entry of matching) {
+        const isBlocking = Array.isArray(entry.extraInfoSpec)
+          ? entry.extraInfoSpec.includes('blocking') || entry.extraInfoSpec.includes('asyncBlocking')
+          : false
+
+        const toSend = isBlocking
+          ? ({ ...payloadWithId, listenerId: entry.id } as any)
+          : payloadBase
+
+        const filtered = this.filterDetailsForListener(toSend, entry.extraInfoSpec)
+        this.ctx.router.sendEvent(entry.extensionId, 'webRequest.onAuthRequired', filtered)
+      }
+    })
   }
 }
