@@ -5,7 +5,7 @@ import { matchesPattern } from './common'
 interface ListenerEntry {
   id: string
   extensionId: string
-  filter: { urls: string[] }
+  filter: chrome.webRequest.RequestFilter
   extraInfoSpec?: string[]
 }
 
@@ -24,6 +24,7 @@ export interface WebRequestDetails {
   url: string
   method: string
   tabId: number
+  windowId?: number
   requestId?: string
   frameId?: number
   parentFrameId?: number
@@ -190,7 +191,7 @@ export class WebRequestAPI {
 
   private addOnBeforeRequestListener = (
     { extension }: ExtensionEvent,
-    filter: { urls: string[] },
+    filter: chrome.webRequest.RequestFilter,
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
@@ -203,7 +204,7 @@ export class WebRequestAPI {
     this.onBeforeRequestListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
-      filter: { urls: filter.urls },
+      filter: { ...filter },
       extraInfoSpec,
     })
   }
@@ -217,7 +218,7 @@ export class WebRequestAPI {
 
   private addOnBeforeSendHeadersListener = (
     { extension }: ExtensionEvent,
-    filter: { urls: string[] },
+    filter: chrome.webRequest.RequestFilter,
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
@@ -230,7 +231,7 @@ export class WebRequestAPI {
     this.onBeforeSendHeadersListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
-      filter: { urls: filter.urls },
+      filter: { ...filter },
       extraInfoSpec,
     })
   }
@@ -244,14 +245,14 @@ export class WebRequestAPI {
 
   private addOnSendHeadersListener = (
     { extension }: ExtensionEvent,
-    filter: { urls: string[] },
+    filter: chrome.webRequest.RequestFilter,
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onSendHeadersListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
-      filter: { urls: filter.urls },
+      filter: { ...filter },
       extraInfoSpec,
     })
   }
@@ -265,7 +266,7 @@ export class WebRequestAPI {
 
   private addOnHeadersReceivedListener = (
     { extension }: ExtensionEvent,
-    filter: { urls: string[] },
+    filter: chrome.webRequest.RequestFilter,
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
@@ -278,7 +279,7 @@ export class WebRequestAPI {
     this.onHeadersReceivedListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
-      filter: { urls: filter.urls },
+      filter: { ...filter },
       extraInfoSpec,
     })
   }
@@ -292,14 +293,14 @@ export class WebRequestAPI {
 
   private addOnResponseStartedListener = (
     { extension }: ExtensionEvent,
-    filter: { urls: string[] },
+    filter: chrome.webRequest.RequestFilter,
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onResponseStartedListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
-      filter: { urls: filter.urls },
+      filter: { ...filter },
       extraInfoSpec,
     })
   }
@@ -313,14 +314,14 @@ export class WebRequestAPI {
 
   private addOnCompletedListener = (
     { extension }: ExtensionEvent,
-    filter: { urls: string[] },
+    filter: chrome.webRequest.RequestFilter,
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onCompletedListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
-      filter: { urls: filter.urls },
+      filter: { ...filter },
       extraInfoSpec,
     })
   }
@@ -334,14 +335,14 @@ export class WebRequestAPI {
 
   private addOnErrorOccurredListener = (
     { extension }: ExtensionEvent,
-    filter: { urls: string[] },
+    filter: chrome.webRequest.RequestFilter,
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
     this.onErrorOccurredListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
-      filter: { urls: filter.urls },
+      filter: { ...filter },
       extraInfoSpec,
     })
   }
@@ -355,7 +356,7 @@ export class WebRequestAPI {
 
   private addOnAuthRequiredListener = (
     { extension }: ExtensionEvent,
-    filter: { urls: string[] },
+    filter: chrome.webRequest.RequestFilter,
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
@@ -371,7 +372,7 @@ export class WebRequestAPI {
     this.onAuthRequiredListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
-      filter: { urls: filter.urls },
+      filter: { ...filter },
       extraInfoSpec,
     })
   }
@@ -511,6 +512,10 @@ export class WebRequestAPI {
       typeof rawWebContentsId === 'number'
         ? this.ctx.store.getTabIdForWebContentsId(rawWebContentsId)
         : -1
+    const windowId =
+      typeof rawWebContentsId === 'number'
+        ? this.ctx.store.getWindowIdForWebContentsId(rawWebContentsId)
+        : undefined
 
     const requestId = this.getOrCreateRequestId(details)
 
@@ -518,6 +523,7 @@ export class WebRequestAPI {
       url: details.url || '',
       method: details.method || 'GET',
       tabId,
+      windowId,
       requestId,
       frameId: typeof details.frameId === 'number' ? details.frameId : 0,
       parentFrameId:
@@ -620,11 +626,37 @@ export class WebRequestAPI {
     return body as any
   }
 
-  private findMatchingListeners(list: ListenerEntry[], url: string): ListenerEntry[] {
-    return list.filter((entry) => {
-      const urls = entry.filter?.urls
-      return urls && urls.length > 0 && urls.some((pattern) => matchesPattern(pattern, url))
-    })
+  /** Map our normalized type strings to Chrome filter ResourceType labels where they differ. */
+  private typeForRequestFilterMatch(detailType?: string): string {
+    const t = detailType || 'other'
+    if (t === 'img') return 'image'
+    return t
+  }
+
+  private listenerMatchesRequest(details: WebRequestDetails, filter: chrome.webRequest.RequestFilter) {
+    const urls = filter.urls
+    if (!urls || urls.length === 0) return false
+    if (!urls.some((pattern) => matchesPattern(pattern, details.url))) return false
+
+    const types = filter.types
+    if (types && types.length > 0) {
+      const t = this.typeForRequestFilterMatch(details.type)
+      if (!types.includes(t as chrome.webRequest.ResourceType)) return false
+    }
+
+    if (typeof filter.tabId === 'number' && filter.tabId !== details.tabId) return false
+
+    if (typeof filter.windowId === 'number') {
+      if (typeof details.windowId !== 'number' || filter.windowId !== details.windowId) {
+        return false
+      }
+    }
+
+    return true
+  }
+
+  private findMatchingListeners(list: ListenerEntry[], details: WebRequestDetails): ListenerEntry[] {
+    return list.filter((entry) => this.listenerMatchesRequest(details, entry.filter))
   }
 
   private mergeRequestHeaders(
@@ -663,17 +695,25 @@ export class WebRequestAPI {
     const url = details.url
     if (!url) return {}
 
-    const matching = this.findMatchingListeners(this.onBeforeRequestListeners, url)
-
+    const probe = this.buildDetails(details as unknown as ElectronRequestDetails, {
+      includeRequestBody: false,
+    })
+    const matching = this.findMatchingListeners(this.onBeforeRequestListeners, probe)
     if (matching.length === 0) return {}
 
     const wantsRequestBody = matching.some((e) => {
       if (!Array.isArray(e.extraInfoSpec)) return false
       return e.extraInfoSpec.includes('requestBody')
     })
-    const payloadBase = this.buildDetails(details as unknown as ElectronRequestDetails, {
-      includeRequestBody: wantsRequestBody,
+    const payloadBase = wantsRequestBody
+      ? this.buildDetails(details as unknown as ElectronRequestDetails, {
+          includeRequestBody: true,
     })
+      : probe
+
+    const requestId =
+      payloadBase.requestId || `wr-${++this.requestIdCounter}`
+    const payloadWithId = { ...payloadBase, requestId }
 
     const hasBlocking = matching.some((e) =>
       Array.isArray(e.extraInfoSpec) && e.extraInfoSpec.includes('blocking'),
@@ -682,7 +722,7 @@ export class WebRequestAPI {
     if (!hasBlocking) {
       for (const entry of matching) {
         const filtered = this.filterDetailsForListener(
-          payloadBase,
+          payloadWithId,
           entry.extraInfoSpec,
         )
         this.ctx.router.sendEvent(
@@ -693,10 +733,6 @@ export class WebRequestAPI {
       }
       return {}
     }
-
-    const requestId =
-      payloadBase.requestId || `wr-${++this.requestIdCounter}`
-    const payloadWithId = { ...payloadBase, requestId }
 
     const blockingEntries = matching.filter(
       (e) => Array.isArray(e.extraInfoSpec) && e.extraInfoSpec.includes('blocking'),
@@ -721,7 +757,7 @@ export class WebRequestAPI {
 
         const toSend = isBlocking
           ? ({ ...payloadWithId, listenerId: entry.id } as any)
-          : payloadBase
+          : payloadWithId
 
         const filtered = this.filterDetailsForListener(
           toSend,
@@ -744,7 +780,7 @@ export class WebRequestAPI {
       requestHeaders: details.requestHeaders as any,
     }
 
-    const matching = this.findMatchingListeners(this.onBeforeSendHeadersListeners, url)
+    const matching = this.findMatchingListeners(this.onBeforeSendHeadersListeners, payloadBase)
     if (matching.length === 0) return {}
 
     const hasBlocking = matching.some((e) => {
@@ -752,10 +788,14 @@ export class WebRequestAPI {
       return e.extraInfoSpec.includes('blocking')
     })
 
+    const requestId =
+      payloadBase.requestId || `wr-${++this.requestIdCounter}`
+    const payloadWithId: WebRequestDetails = { ...payloadBase, requestId }
+
     if (!hasBlocking) {
       for (const entry of matching) {
         const filtered = this.filterDetailsForListener(
-          payloadBase,
+          payloadWithId,
           entry.extraInfoSpec,
         )
         this.ctx.router.sendEvent(
@@ -766,10 +806,6 @@ export class WebRequestAPI {
       }
       return {}
     }
-
-    const requestId =
-      payloadBase.requestId || `wr-${++this.requestIdCounter}`
-    const payloadWithId: WebRequestDetails = { ...payloadBase, requestId }
 
     const blockingEntries = matching.filter((e) => {
       if (!Array.isArray(e.extraInfoSpec)) return false
@@ -797,7 +833,7 @@ export class WebRequestAPI {
 
         const toSend = isBlocking
           ? ({ ...payloadWithId, listenerId: entry.id } as any)
-          : payloadBase
+          : payloadWithId
 
         const filtered = this.filterDetailsForListener(toSend, entry.extraInfoSpec)
         this.ctx.router.sendEvent(entry.extensionId, 'webRequest.onBeforeSendHeaders', filtered)
@@ -814,12 +850,16 @@ export class WebRequestAPI {
       requestHeaders: details.requestHeaders as any,
     }
 
-    const matching = this.findMatchingListeners(this.onSendHeadersListeners, url)
+    const matching = this.findMatchingListeners(this.onSendHeadersListeners, payloadBase)
     if (matching.length === 0) return
+
+    const requestId =
+      payloadBase.requestId || `wr-${++this.requestIdCounter}`
+    const payloadWithId = { ...payloadBase, requestId }
 
     for (const entry of matching) {
       const filtered = this.filterDetailsForListener(
-        payloadBase,
+        payloadWithId,
         entry.extraInfoSpec,
       )
       this.ctx.router.sendEvent(
@@ -843,7 +883,7 @@ export class WebRequestAPI {
       responseHeaders: details.responseHeaders as any,
     }
 
-    const matching = this.findMatchingListeners(this.onHeadersReceivedListeners, url)
+    const matching = this.findMatchingListeners(this.onHeadersReceivedListeners, payloadBase)
     if (matching.length === 0) return {}
 
     const hasBlocking = matching.some((e) => {
@@ -851,10 +891,14 @@ export class WebRequestAPI {
       return e.extraInfoSpec.includes('blocking')
     })
 
+    const requestId =
+      payloadBase.requestId || `wr-${++this.requestIdCounter}`
+    const payloadWithId: WebRequestDetails = { ...payloadBase, requestId }
+
     if (!hasBlocking) {
       for (const entry of matching) {
         const filtered = this.filterDetailsForListener(
-          payloadBase,
+          payloadWithId,
           entry.extraInfoSpec,
         )
         this.ctx.router.sendEvent(
@@ -865,10 +909,6 @@ export class WebRequestAPI {
       }
       return {}
     }
-
-    const requestId =
-      payloadBase.requestId || `wr-${++this.requestIdCounter}`
-    const payloadWithId: WebRequestDetails = { ...payloadBase, requestId }
 
     const blockingEntries = matching.filter((e) => {
       if (!Array.isArray(e.extraInfoSpec)) return false
@@ -896,7 +936,7 @@ export class WebRequestAPI {
 
         const toSend = isBlocking
           ? ({ ...payloadWithId, listenerId: entry.id } as any)
-          : payloadBase
+          : payloadWithId
 
         const filtered = this.filterDetailsForListener(toSend, entry.extraInfoSpec)
         this.ctx.router.sendEvent(entry.extensionId, 'webRequest.onHeadersReceived', filtered)
@@ -918,12 +958,16 @@ export class WebRequestAPI {
       fromCache: (details as any).fromCache,
     }
 
-    const matching = this.findMatchingListeners(this.onResponseStartedListeners, url)
+    const matching = this.findMatchingListeners(this.onResponseStartedListeners, payloadBase)
     if (matching.length === 0) return
+
+    const requestId =
+      payloadBase.requestId || `wr-${++this.requestIdCounter}`
+    const payloadWithId = { ...payloadBase, requestId }
 
     for (const entry of matching) {
       const filtered = this.filterDetailsForListener(
-        payloadBase,
+        payloadWithId,
         entry.extraInfoSpec,
       )
       this.ctx.router.sendEvent(
@@ -946,12 +990,16 @@ export class WebRequestAPI {
       fromCache: (details as any).fromCache,
     }
 
-    const matching = this.findMatchingListeners(this.onCompletedListeners, url)
+    const matching = this.findMatchingListeners(this.onCompletedListeners, payloadBase)
     if (matching.length === 0) return
+
+    const requestId =
+      payloadBase.requestId || `wr-${++this.requestIdCounter}`
+    const payloadWithId = { ...payloadBase, requestId }
 
     for (const entry of matching) {
       const filtered = this.filterDetailsForListener(
-        payloadBase,
+        payloadWithId,
         entry.extraInfoSpec,
       )
       this.ctx.router.sendEvent(
@@ -973,12 +1021,16 @@ export class WebRequestAPI {
       error: (details as any).error,
     }
 
-    const matching = this.findMatchingListeners(this.onErrorOccurredListeners, url)
+    const matching = this.findMatchingListeners(this.onErrorOccurredListeners, payloadBase)
     if (matching.length === 0) return
+
+    const requestId =
+      payloadBase.requestId || `wr-${++this.requestIdCounter}`
+    const payloadWithId = { ...payloadBase, requestId }
 
     for (const entry of matching) {
       const filtered = this.filterDetailsForListener(
-        payloadBase,
+        payloadWithId,
         entry.extraInfoSpec,
       )
       this.ctx.router.sendEvent(
@@ -996,7 +1048,7 @@ export class WebRequestAPI {
     if (!url) return {}
 
     const payloadBase = this.buildDetails(details)
-    const matching = this.findMatchingListeners(this.onAuthRequiredListeners, url)
+    const matching = this.findMatchingListeners(this.onAuthRequiredListeners, payloadBase)
     if (matching.length === 0) return {}
 
     const hasBlocking = matching.some((e) => {
@@ -1004,16 +1056,16 @@ export class WebRequestAPI {
       return e.extraInfoSpec.includes('blocking') || e.extraInfoSpec.includes('asyncBlocking')
     })
 
+    const requestId = payloadBase.requestId || `wr-${++this.requestIdCounter}`
+    const payloadWithId: WebRequestDetails = { ...payloadBase, requestId }
+
     if (!hasBlocking) {
       for (const entry of matching) {
-        const filtered = this.filterDetailsForListener(payloadBase, entry.extraInfoSpec)
+        const filtered = this.filterDetailsForListener(payloadWithId, entry.extraInfoSpec)
         this.ctx.router.sendEvent(entry.extensionId, 'webRequest.onAuthRequired', filtered)
       }
       return {}
     }
-
-    const requestId = payloadBase.requestId || `wr-${++this.requestIdCounter}`
-    const payloadWithId: WebRequestDetails = { ...payloadBase, requestId }
 
     const blockingEntries = matching.filter((e) => {
       if (!Array.isArray(e.extraInfoSpec)) return false
@@ -1040,7 +1092,7 @@ export class WebRequestAPI {
 
         const toSend = isBlocking
           ? ({ ...payloadWithId, listenerId: entry.id } as any)
-          : payloadBase
+          : payloadWithId
 
         const filtered = this.filterDetailsForListener(toSend, entry.extraInfoSpec)
         this.ctx.router.sendEvent(entry.extensionId, 'webRequest.onAuthRequired', filtered)

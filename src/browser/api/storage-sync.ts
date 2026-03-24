@@ -198,7 +198,12 @@ export class StorageSyncAPI {
 
   private localSave = async (extensionId: string, data: Record<string, any>) => {
     await this.localReady
-    const json = JSON.stringify(data)
+    let json: string
+    try {
+      json = JSON.stringify(data)
+    } catch {
+      throw new Error('Value is not JSON-serializable')
+    }
     const content = safeStorage.isEncryptionAvailable()
       ? safeStorage.encryptString(json)
       : json

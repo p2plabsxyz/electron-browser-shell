@@ -435,6 +435,7 @@ export class ExtensionRouter {
     const deadListeners: EventListener[] = []
     let matchedCount = 0
     let sentCount = 0
+    let serviceWorkerAsync = 0
     for (const listener of eventListeners) {
       const { type, extensionId } = listener
 
@@ -444,6 +445,7 @@ export class ExtensionRouter {
       matchedCount++
 
       if (type === 'service-worker') {
+        serviceWorkerAsync++
         const scope = `chrome-extension://${extensionId}/`
         const argsCopy = [...args]
         this.session.serviceWorkers
@@ -453,7 +455,7 @@ export class ExtensionRouter {
               if (!serviceWorker || (serviceWorker as any).isDestroyed?.()) return
               try {
                 serviceWorker.send(ipcName, ...argsCopy)
-                sentCount++
+                d(`delivered '${eventName}' to service worker [${extensionId}]`)
               } catch (err) {
                 d('service worker send failed for %s: %o', eventName, err)
               }
@@ -494,7 +496,13 @@ export class ExtensionRouter {
       this.deliverToTargetExtensionWhenNoListener(targetExtensionId, eventName, ipcName, args)
     }
 
+    if (serviceWorkerAsync > 0) {
+      d(
+        `sendEvent '${eventName}': ${sentCount} frame host(s); ${serviceWorkerAsync} service worker delivery(s) scheduled`,
+      )
+    } else {
     d(`sent '${eventName}' event to ${sentCount} listeners`)
+  }
   }
 
   /**

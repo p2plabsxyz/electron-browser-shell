@@ -191,18 +191,6 @@ export class ProxyAPI {
     return `${host}${port}`
   }
 
-  private formatSingleProxy(server?: chrome.proxy.ProxyServer): string | undefined {
-    const hostPort = this.formatHostPort(server)
-    if (!hostPort) return undefined
-
-    if (server?.scheme === 'socks4' || server?.scheme === 'socks5') {
-      // Electron expects `socks=host:port` (scheme prefix is handled elsewhere).
-      return hostPort
-    }
-
-    return hostPort
-  }
-
   private formatSchemeProxy(server?: chrome.proxy.ProxyServer): string | undefined {
     const hostPort = this.formatHostPort(server)
     if (!hostPort) return undefined

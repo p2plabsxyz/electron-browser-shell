@@ -244,14 +244,21 @@ export class ExtensionStore extends EventEmitter {
 
   // Resolve WebContents id to the cached chrome.tabs tab id.
   getTabIdForWebContentsId(webContentsId: number): number {
-    const tab = Array.from(this.tabs).find(
-      (t) => !t.isDestroyed() && t.id === webContentsId,
-    )
-    if (!tab) return -1
+    const tab = webContents.fromId(webContentsId)
+    if (!tab || tab.isDestroyed() || !this.tabs.has(tab)) return -1
 
     const cached = this.tabDetailsCache.get(tab.id)
     const cachedId = cached && typeof cached.id === 'number' ? cached.id : undefined
     // tab.id is the WebContents id, so fallback to that if cache isn't ready yet.
     return typeof cachedId === 'number' ? cachedId : tab.id
+  }
+
+  /** Window id for a tracked tab, for webRequest RequestFilter.windowId. */
+  getWindowIdForWebContentsId(webContentsId: number): number | undefined {
+    const tab = webContents.fromId(webContentsId)
+    if (!tab || tab.isDestroyed() || !this.tabs.has(tab)) return undefined
+    const win = this.tabToWindow.get(tab)
+    if (!win || win.isDestroyed()) return undefined
+    return win.id
   }
 }

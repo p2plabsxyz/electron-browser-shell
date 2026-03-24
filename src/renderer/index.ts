@@ -31,9 +31,9 @@ export const injectExtensionAPIs = () => {
     }
 
     let result
-    // Emulate Chrome's chrome.runtime.lastError for callback-style APIs.
-    // Many extensions (including archiveweb.page) check this inside callbacks.
-    let lastError: { message: string } | null = null
+    // Callback-style Chrome APIs only set runtime.lastError when something failed;
+    // on success the property is absent / undefined (not null).
+    let lastError: { message: string } | undefined
 
     try {
       result = await ipcRenderer.invoke('crx-msg', extensionId, fnName, ...args)
@@ -50,18 +50,21 @@ export const injectExtensionAPIs = () => {
     }
 
     const chromeAny = (globalThis as any).chrome
+    const rt = chromeAny?.runtime
     if (callback) {
       try {
-        if (chromeAny?.runtime) chromeAny.runtime.lastError = lastError
+        if (rt) {
+          if (lastError) rt.lastError = lastError
+          else delete rt.lastError
+        }
         callback(result)
       } finally {
-        if (chromeAny?.runtime) chromeAny.runtime.lastError = null
+        if (rt) delete rt.lastError
       }
       return
     }
 
-    // Promise-style APIs shouldn't expose lastError; clear any stale value.
-    if (chromeAny?.runtime) chromeAny.runtime.lastError = null
+    if (rt) delete rt.lastError
     return result
   }
 
