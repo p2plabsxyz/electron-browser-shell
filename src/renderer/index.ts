@@ -580,6 +580,23 @@ export const injectExtensionAPIs = () => {
         },
       },
 
+      scripting: {
+        shouldInject: () => manifest.manifest_version === 3,
+        factory: (base) => {
+          const ipcExecuteScript = invokeExtension('scripting.executeScript')
+          return {
+            ...base,
+            insertCSS: invokeExtension('scripting.insertCSS'),
+            executeScript: (injection: any) => {
+              if (injection && typeof injection.func === 'function') {
+                injection = { ...injection, func: String(injection.func) }
+              }
+              return ipcExecuteScript(injection)
+            },
+          }
+        },
+      },
+
       runtime: {
         factory: (base) => {
           const patched: any = {}
@@ -616,11 +633,24 @@ export const injectExtensionAPIs = () => {
           const originalRemoveListener = base?.onChanged?.removeListener?.bind(base.onChanged)
 
           const addListener = (cb: any) => {
-            if (originalAddListener) originalAddListener(cb)
+            if (originalAddListener) {
+              try {
+                originalAddListener(cb)
+              } catch {
+                // Some Electron contexts expose a partial native storage event that can throw.
+                // We still want our IPC-backed listener to be registered.
+              }
+            }
             customOnChanged.addListener(cb)
           }
           const removeListener = (cb: any) => {
-            if (originalRemoveListener) originalRemoveListener(cb)
+            if (originalRemoveListener) {
+              try {
+                originalRemoveListener(cb)
+              } catch {
+                // Ignore and continue removing from the IPC-backed listener set.
+              }
+            }
             customOnChanged.removeListener(cb)
           }
           const hasListener = (cb: any) => {
@@ -631,12 +661,23 @@ export const injectExtensionAPIs = () => {
 
           const onChanged = { addListener, removeListener, hasListener, hasListeners }
 
+          const cbWrap = (fn: (...a: any[]) => Promise<any>) =>
+            (...args: any[]) => {
+              const last = args[args.length - 1]
+              if (typeof last === 'function') {
+                const cb = args.pop()
+                fn(...args).then(cb).catch(() => cb(undefined))
+                return
+              }
+              return fn(...args)
+            }
+
           const ipcLocal = {
-            get: invokeExtension('storage.local.get'),
-            set: invokeExtension('storage.local.set'),
-            remove: invokeExtension('storage.local.remove'),
-            clear: invokeExtension('storage.local.clear'),
-            getBytesInUse: invokeExtension('storage.local.getBytesInUse'),
+            get: cbWrap(invokeExtension('storage.local.get')),
+            set: cbWrap(invokeExtension('storage.local.set')),
+            remove: cbWrap(invokeExtension('storage.local.remove')),
+            clear: cbWrap(invokeExtension('storage.local.clear')),
+            getBytesInUse: cbWrap(invokeExtension('storage.local.getBytesInUse')),
             onChanged,
             QUOTA_BYTES: 10485760,
           }
@@ -646,13 +687,14 @@ export const injectExtensionAPIs = () => {
             onChanged,
             local: ipcLocal,
             managed: ipcLocal,
+            session: (base as any)?.session || ipcLocal,
             sync: {
               ...(base as any)?.sync ?? ipcLocal,
-              get: invokeExtension('storage.sync.get'),
-              set: invokeExtension('storage.sync.set'),
-              remove: invokeExtension('storage.sync.remove'),
-              clear: invokeExtension('storage.sync.clear'),
-              getBytesInUse: invokeExtension('storage.sync.getBytesInUse'),
+              get: cbWrap(invokeExtension('storage.sync.get')),
+              set: cbWrap(invokeExtension('storage.sync.set')),
+              remove: cbWrap(invokeExtension('storage.sync.remove')),
+              clear: cbWrap(invokeExtension('storage.sync.clear')),
+              getBytesInUse: cbWrap(invokeExtension('storage.sync.getBytesInUse')),
             },
           }
         },

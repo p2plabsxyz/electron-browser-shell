@@ -26,6 +26,7 @@ export interface WebRequestDetails {
   tabId: number
   windowId?: number
   requestId?: string
+  documentId?: string
   frameId?: number
   parentFrameId?: number
   type?: string
@@ -518,6 +519,8 @@ export class WebRequestAPI {
         : undefined
 
     const requestId = this.getOrCreateRequestId(details)
+    const frameId = typeof details.frameId === 'number' ? details.frameId : 0
+    const documentId = tabId >= 0 ? this.ctx.store.getDocumentId(tabId, frameId) : undefined
 
     return {
       url: details.url || '',
@@ -525,7 +528,8 @@ export class WebRequestAPI {
       tabId,
       windowId,
       requestId,
-      frameId: typeof details.frameId === 'number' ? details.frameId : 0,
+      documentId,
+      frameId,
       parentFrameId:
         typeof details.parentFrameId === 'number' ? details.parentFrameId : -1,
       type: this.normalizeResourceType(details.resourceType),

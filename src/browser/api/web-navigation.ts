@@ -46,20 +46,23 @@ const getDocumentLifecycle = (frame: Electron.WebFrameMain): DocumentLifecycle =
 
 const getFrameDetails = (
   frame: Electron.WebFrameMain,
-): chrome.webNavigation.GetFrameResultDetails => ({
-  // TODO(mv3): implement new properties
-  url: frame.url,
-  documentId: 'not-implemented',
-  documentLifecycle: getDocumentLifecycle(frame),
-  errorOccurred: false,
-  frameType: getFrameType(frame),
-  // FIXME: frameId is missing from @types/chrome
-  ...{
-    frameId: getFrameId(frame),
-  },
-  parentDocumentId: undefined,
-  parentFrameId: getParentFrameId(frame),
-})
+  ctx?: { store: import('../store').ExtensionStore; tabId?: number },
+): chrome.webNavigation.GetFrameResultDetails => {
+  const fid = getFrameId(frame)
+  const docId = ctx?.store?.getDocumentId(ctx.tabId ?? -1, fid)
+  return {
+    url: frame.url,
+    documentId: docId || 'unknown',
+    documentLifecycle: getDocumentLifecycle(frame),
+    errorOccurred: false,
+    frameType: getFrameType(frame),
+    ...{
+      frameId: fid,
+    },
+    parentDocumentId: undefined,
+    parentFrameId: getParentFrameId(frame),
+  }
+}
 
 export class WebNavigationAPI {
   constructor(private ctx: ExtensionContext) {
@@ -111,7 +114,7 @@ export class WebNavigationAPI {
       })
     }
 
-    return targetFrame ? getFrameDetails(targetFrame) : null
+    return targetFrame ? getFrameDetails(targetFrame, { store: this.ctx.store, tabId: details.tabId }) : null
   }
 
   private getAllFrames(
@@ -120,7 +123,8 @@ export class WebNavigationAPI {
   ): chrome.webNavigation.GetAllFrameResultDetails[] | null {
     const tab = this.ctx.store.getTabById(details.tabId)
     if (!tab || !('mainFrame' in tab)) return []
-    return (tab as any).mainFrame.framesInSubtree.map(getFrameDetails)
+    const ctx = { store: this.ctx.store, tabId: details.tabId }
+    return (tab as any).mainFrame.framesInSubtree.map((f: Electron.WebFrameMain) => getFrameDetails(f, ctx))
   }
 
   private sendNavigationEvent = (eventName: string, details: { url: string }) => {
@@ -133,14 +137,17 @@ export class WebNavigationAPI {
     { url, frame }: Electron.Event<Electron.WebContentsWillNavigateEventParams>,
   ) => {
     if (tab.isDestroyed()) return
-    const details = withFrame(frame, (f) => ({
-      sourceTabId: tab.id,
-      sourceProcessId: f.processId,
-      sourceFrameId: getFrameId(f),
-      url,
-      tabId: tab.id,
-      timeStamp: Date.now(),
-    }))
+    const details = withFrame(frame, (f) => {
+      const frameId = getFrameId(f)
+      return {
+        sourceTabId: tab.id,
+        sourceProcessId: f.processId,
+        sourceFrameId: frameId,
+        url,
+        tabId: tab.id,
+        timeStamp: Date.now(),
+      }
+    })
     if (!details) return
     this.sendNavigationEvent('onCreatedNavigationTarget', details)
   }
@@ -156,16 +163,21 @@ export class WebNavigationAPI {
     if (tab.isDestroyed()) return
     if (isSameDocument) return
 
-    const details = withFrame(frame, (f) => ({
-      frameId: getFrameId(f),
-      frameType: getFrameType(f),
-      documentLifecycle: getDocumentLifecycle(f),
-      parentFrameId: getParentFrameId(f),
-      processId: f.processId,
-      tabId: tab.id,
-      timeStamp: Date.now(),
-      url,
-    }))
+    const details = withFrame(frame, (f) => {
+      const frameId = getFrameId(f)
+      const documentId = this.ctx.store.newDocumentId(tab.id, frameId)
+      return {
+        documentId,
+        frameId,
+        frameType: getFrameType(f),
+        documentLifecycle: getDocumentLifecycle(f),
+        parentFrameId: getParentFrameId(f),
+        processId: f.processId,
+        tabId: tab.id,
+        timeStamp: Date.now(),
+        url,
+      }
+    })
     if (!details) return
     this.sendNavigationEvent('onBeforeNavigate', details)
   }
@@ -182,18 +194,22 @@ export class WebNavigationAPI {
   ) => {
     if (tab.isDestroyed()) return
     const frame = getFrame(frameProcessId, frameRoutingId)
-    const details = withFrame(frame ?? null, (f) => ({
-      frameId: getFrameId(f),
-      parentFrameId: getParentFrameId(f),
-      frameType: getFrameType(f),
-      transitionType: '', // TODO(mv3)
-      transitionQualifiers: [], // TODO(mv3)
-      documentLifecycle: getDocumentLifecycle(f),
-      processId: frameProcessId,
-      tabId: tab.id,
-      timeStamp: Date.now(),
-      url,
-    }))
+    const details = withFrame(frame ?? null, (f) => {
+      const frameId = getFrameId(f)
+      return {
+        documentId: this.ctx.store.getDocumentId(tab.id, frameId) || this.ctx.store.newDocumentId(tab.id, frameId),
+        frameId,
+        parentFrameId: getParentFrameId(f),
+        frameType: getFrameType(f),
+        transitionType: '',
+        transitionQualifiers: [] as string[],
+        documentLifecycle: getDocumentLifecycle(f),
+        processId: frameProcessId,
+        tabId: tab.id,
+        timeStamp: Date.now(),
+        url,
+      }
+    })
     if (!details) return
     this.sendNavigationEvent('onCommitted', details)
   }
@@ -208,34 +224,42 @@ export class WebNavigationAPI {
   ) => {
     if (tab.isDestroyed()) return
     const frame = getFrame(frameProcessId, frameRoutingId)
-    const details = withFrame(frame ?? null, (f) => ({
-      transitionType: '', // TODO
-      transitionQualifiers: [], // TODO
-      frameId: getFrameId(f),
-      parentFrameId: getParentFrameId(f),
-      frameType: getFrameType(f),
-      documentLifecycle: getDocumentLifecycle(f),
-      processId: frameProcessId,
-      tabId: tab.id,
-      timeStamp: Date.now(),
-      url,
-    }))
+    const details = withFrame(frame ?? null, (f) => {
+      const frameId = getFrameId(f)
+      return {
+        documentId: this.ctx.store.getDocumentId(tab.id, frameId) || this.ctx.store.newDocumentId(tab.id, frameId),
+        transitionType: '',
+        transitionQualifiers: [] as string[],
+        frameId,
+        parentFrameId: getParentFrameId(f),
+        frameType: getFrameType(f),
+        documentLifecycle: getDocumentLifecycle(f),
+        processId: frameProcessId,
+        tabId: tab.id,
+        timeStamp: Date.now(),
+        url,
+      }
+    })
     if (!details) return
     this.sendNavigationEvent('onHistoryStateUpdated', details)
   }
 
   private onDOMContentLoaded = (tab: Electron.WebContents, frame: Electron.WebFrameMain) => {
     if (tab.isDestroyed()) return
-    const details = withFrame(frame, (f) => ({
-      frameId: getFrameId(f),
-      parentFrameId: getParentFrameId(f),
-      frameType: getFrameType(f),
-      documentLifecycle: getDocumentLifecycle(f),
-      processId: f.processId,
-      tabId: tab.id,
-      timeStamp: Date.now(),
-      url: f.url,
-    }))
+    const details = withFrame(frame, (f) => {
+      const frameId = getFrameId(f)
+      return {
+        documentId: this.ctx.store.getDocumentId(tab.id, frameId) || this.ctx.store.newDocumentId(tab.id, frameId),
+        frameId,
+        parentFrameId: getParentFrameId(f),
+        frameType: getFrameType(f),
+        documentLifecycle: getDocumentLifecycle(f),
+        processId: f.processId,
+        tabId: tab.id,
+        timeStamp: Date.now(),
+        url: f.url,
+      }
+    })
     if (!details) return
     this.sendNavigationEvent('onDOMContentLoaded', details)
 
@@ -254,16 +278,20 @@ export class WebNavigationAPI {
     if (tab.isDestroyed()) return
     const frame = getFrame(frameProcessId, frameRoutingId)
     const url = tab.getURL()
-    const details = withFrame(frame ?? null, (f) => ({
-      frameId: getFrameId(f),
-      parentFrameId: getParentFrameId(f),
-      frameType: getFrameType(f),
-      documentLifecycle: getDocumentLifecycle(f),
-      processId: frameProcessId,
-      tabId: tab.id,
-      timeStamp: Date.now(),
-      url,
-    }))
+    const details = withFrame(frame ?? null, (f) => {
+      const frameId = getFrameId(f)
+      return {
+        documentId: this.ctx.store.getDocumentId(tab.id, frameId) || this.ctx.store.newDocumentId(tab.id, frameId),
+        frameId,
+        parentFrameId: getParentFrameId(f),
+        frameType: getFrameType(f),
+        documentLifecycle: getDocumentLifecycle(f),
+        processId: frameProcessId,
+        tabId: tab.id,
+        timeStamp: Date.now(),
+        url,
+      }
+    })
     if (!details) return
     this.sendNavigationEvent('onCompleted', details)
   }

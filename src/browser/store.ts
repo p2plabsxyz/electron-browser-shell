@@ -1,4 +1,5 @@
 import { BrowserWindow, webContents } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { ContextMenuType } from './api/common'
 import { ChromeExtensionImpl } from './impl'
@@ -26,6 +27,18 @@ export class ExtensionStore extends EventEmitter {
 
   tabDetailsCache = new Map<number, Partial<chrome.tabs.Tab>>()
   windowDetailsCache = new Map<number, Partial<chrome.windows.Window>>()
+
+  private documentIdMap = new Map<string, string>()
+
+  newDocumentId(tabId: number, frameId: number): string {
+    const id = randomUUID().replace(/-/g, '').toUpperCase()
+    this.documentIdMap.set(`${tabId}:${frameId}`, id)
+    return id
+  }
+
+  getDocumentId(tabId: number, frameId: number): string | undefined {
+    return this.documentIdMap.get(`${tabId}:${frameId}`)
+  }
 
   urlOverrides: Record<string, string> = {}
 
@@ -146,7 +159,9 @@ export class ExtensionStore extends EventEmitter {
     this.tabs.delete(tab)
     this.tabToWindow.delete(tab)
 
-    // TODO: clear active tab
+    for (const key of this.documentIdMap.keys()) {
+      if (key.startsWith(`${tabId}:`)) this.documentIdMap.delete(key)
+    }
 
     // Clear window if it has no remaining tabs
     const windowHasTabs = Array.from(this.tabs).find((tab) => this.tabToWindow.get(tab) === win)

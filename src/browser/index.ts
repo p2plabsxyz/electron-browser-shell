@@ -26,6 +26,7 @@ import { checkLicense, License } from './license'
 import { readLoadedExtensionManifest } from './manifest'
 import { PermissionsAPI } from './api/permissions'
 import { ProxyAPI } from './api/proxy'
+import { ScriptingAPI } from './api/scripting'
 import { resolvePartition } from './partition'
 
 function checkVersion() {
@@ -139,6 +140,7 @@ export class ElectronChromeExtensions extends EventEmitter {
     permissions: PermissionsAPI
     proxy: ProxyAPI
     runtime: RuntimeAPI
+    scripting: ScriptingAPI
     storageSync: StorageSyncAPI
     tabs: TabsAPI
     webNavigation: WebNavigationAPI
@@ -182,6 +184,7 @@ export class ElectronChromeExtensions extends EventEmitter {
       permissions: new PermissionsAPI(this.ctx),
       proxy: new ProxyAPI(this.ctx),
       runtime: new RuntimeAPI(this.ctx),
+      scripting: new ScriptingAPI(this.ctx),
       storageSync: new StorageSyncAPI(this.ctx),
       tabs: new TabsAPI(this.ctx),
       webNavigation: new WebNavigationAPI(this.ctx),
