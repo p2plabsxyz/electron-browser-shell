@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 
 import { parseFilter, matchesFilter, elementTypes } from 'abp-filter-parser'
+import { getDomain } from 'tldts'
 
 import { ExtensionContext } from '../context'
 import { ExtensionEvent } from '../router'
@@ -93,6 +94,18 @@ function safeHostname(urlStr: string): string {
 }
 
 /**
+ * Same registrable domain (eTLD+1 / schemeful site) using the bundled public suffix list.
+ * Matches browser behavior for sibling subdomains (e.g. static.* vs www.* on grammarly.com).
+ */
+function sameRegistrableDomain(hostnameA: string, hostnameB: string): boolean {
+  if (!hostnameA || !hostnameB) return false
+  if (hostnameA === hostnameB) return true
+  const da = getDomain(hostnameA)
+  const db = getDomain(hostnameB)
+  return da != null && db != null && da === db
+}
+
+/**
  * Electron often lacks Referer; without a reliable initiator, Ghostery-style rules can
  * block same-site scripts/XHR. Chrome applies DNR in a document-aware pipeline; we
  * approximate by not cancelling "block" for same-site subresources (non top-level doc).
@@ -107,10 +120,7 @@ function shouldSkipNetworkBlockAsSameSite(
   const rh = safeHostname(requestUrl)
   const ih = safeHostname(initiatorUrl)
   if (!rh || !ih) return false
-  if (rh === ih) return true
-  const ihParts = ih.split('.').filter(Boolean)
-  if (ihParts.length < 2) return false
-  return rh.endsWith('.' + ih)
+  return sameRegistrableDomain(rh, ih)
 }
 
 function normalizeResourceTypeForDnr(type: string | undefined): string {
