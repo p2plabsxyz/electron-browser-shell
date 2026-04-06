@@ -123,6 +123,25 @@ function shouldSkipNetworkBlockAsSameSite(
   return sameRegistrableDomain(rh, ih)
 }
 
+function extensionIdFromInitiatorUrl(initiatorUrl: string | undefined): string | undefined {
+  if (!initiatorUrl || !initiatorUrl.startsWith('chrome-extension://')) return undefined
+  try {
+    return new URL(initiatorUrl).hostname || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Skip block/redirect when the rule belongs to another extension than the initiator. */
+function shouldSkipCrossExtensionDeclarativeAction(
+  initiatorUrl: string | undefined,
+  ruleExtensionId: string,
+): boolean {
+  const fromExt = extensionIdFromInitiatorUrl(initiatorUrl)
+  if (!fromExt) return false
+  return fromExt !== ruleExtensionId
+}
+
 function normalizeResourceTypeForDnr(type: string | undefined): string {
   const t = type || 'other'
   if (t === 'img') return 'image'
@@ -433,6 +452,13 @@ export class DeclarativeNetRequestAPI {
 
     if (!best) return null
     const response = this.actionToBlockingResponse(best, details.url)
+    if (
+      response &&
+      (response.cancel === true || typeof response.redirectUrl === 'string') &&
+      shouldSkipCrossExtensionDeclarativeAction(details.initiator, best.extensionId)
+    ) {
+      return null
+    }
     if (
       response?.cancel === true &&
       shouldSkipNetworkBlockAsSameSite(details.url, details.initiator, details.type)

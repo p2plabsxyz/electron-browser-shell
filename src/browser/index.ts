@@ -37,6 +37,15 @@ function checkVersion() {
   }
 }
 
+/** Align with server lists that use bare hostnames (FQDN dot, case, IPv6 brackets). */
+function normalizeProxyAuthHost(host: string): string {
+  if (host == null || typeof host !== 'string') return host
+  let h = host.trim().toLowerCase()
+  while (h.endsWith('.')) h = h.slice(0, -1)
+  if (h.startsWith('[') && h.endsWith(']')) h = h.slice(1, -1)
+  return h
+}
+
 function resolvePreloadPath(modulePath?: string) {
   // Attempt to resolve preload path from module exports
   try {
@@ -132,8 +141,8 @@ export class ElectronChromeExtensions extends EventEmitter {
     browserAction: BrowserActionAPI
     contextMenus: ContextMenusAPI
     management: ManagementAPI
-    webRequest: WebRequestAPI
     declarativeNetRequest: DeclarativeNetRequestAPI
+    webRequest: WebRequestAPI
     commands: CommandsAPI
     cookies: CookiesAPI
     debugger: DebuggerAPI
@@ -201,41 +210,49 @@ export class ElectronChromeExtensions extends EventEmitter {
   }
 
   private listenForAuthRequired() {
-    app.on('login', async (event, webContents, request, authInfo, callback) => {
-      if (!webContents || webContents.session !== this.ctx.session) return
+    app.on(
+      'login',
+      async (event, webContents, authenticationResponseDetails, authInfo, callback) => {
+        // Wrong session: let Chromium handle it. If webContents is null, still run so
+        // proxy auth can reach webRequest (extension listeners).
+        if (webContents && webContents.session !== this.ctx.session) return
 
       event.preventDefault()
 
-      try {
-        const result = await this.api.webRequest.notifyOnAuthRequired({
-          id: (request as any)?.id,
-          url: request.url,
-          method: (request as any)?.method,
-          webContentsId: webContents.id,
-          timestamp: Date.now(),
-          isProxy: authInfo.isProxy,
-          scheme: authInfo.scheme,
-          realm: authInfo.realm,
-          challenger: {
-            host: authInfo.host,
-            port: authInfo.port,
-          },
-        })
+        try {
+          const result = await this.api.webRequest.notifyOnAuthRequired({
+            id: (authenticationResponseDetails as any)?.id,
+            url: authenticationResponseDetails.url,
+            method: (authenticationResponseDetails as any)?.method,
+            webContentsId: webContents?.id,
+            timestamp: Date.now(),
+            isProxy: authInfo.isProxy,
+            scheme: authInfo.scheme,
+            realm: authInfo.realm,
+            challenger: {
+              host: normalizeProxyAuthHost(authInfo.host),
+              port: authInfo.port,
+            },
+          })
 
         if (result.cancel) {
           callback()
           return
         }
 
-        const credentials = result.authCredentials
-        if (credentials?.username || credentials?.password) {
-          callback(credentials.username || '', credentials.password || '')
-          return
-        }
-      } catch {}
+          const credentials = result.authCredentials
+          if (
+            credentials != null &&
+            (credentials.username != null || credentials.password != null)
+          ) {
+            callback(credentials.username ?? '', credentials.password ?? '')
+            return
+          }
+        } catch {}
 
-      callback()
-    })
+        callback()
+      },
+    )
   }
 
   private listenForExtensions() {

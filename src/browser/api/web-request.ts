@@ -210,6 +210,9 @@ export class WebRequestAPI {
       const perms = (extension.manifest?.permissions || []) as string[]
       if (!perms.includes('webRequestBlocking')) return
     }
+    this.onBeforeRequestListeners = this.onBeforeRequestListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
     this.onBeforeRequestListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -237,6 +240,9 @@ export class WebRequestAPI {
       const perms = (extension.manifest?.permissions || []) as string[]
       if (!perms.includes('webRequestBlocking')) return
     }
+    this.onBeforeSendHeadersListeners = this.onBeforeSendHeadersListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
     this.onBeforeSendHeadersListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -258,6 +264,9 @@ export class WebRequestAPI {
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
+    this.onSendHeadersListeners = this.onSendHeadersListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
     this.onSendHeadersListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -285,6 +294,9 @@ export class WebRequestAPI {
       const perms = (extension.manifest?.permissions || []) as string[]
       if (!perms.includes('webRequestBlocking')) return
     }
+    this.onHeadersReceivedListeners = this.onHeadersReceivedListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
     this.onHeadersReceivedListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -306,6 +318,9 @@ export class WebRequestAPI {
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
+    this.onResponseStartedListeners = this.onResponseStartedListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
     this.onResponseStartedListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -327,6 +342,9 @@ export class WebRequestAPI {
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
+    this.onCompletedListeners = this.onCompletedListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
     this.onCompletedListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -348,6 +366,9 @@ export class WebRequestAPI {
     extraInfoSpec?: string[],
   ) => {
     if (!filter?.urls || !Array.isArray(filter.urls)) return
+    this.onErrorOccurredListeners = this.onErrorOccurredListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
     this.onErrorOccurredListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -375,9 +396,14 @@ export class WebRequestAPI {
       (extraInfoSpec.includes('blocking') || extraInfoSpec.includes('asyncBlocking'))
     if (wantsBlocking) {
       const perms = (extension.manifest?.permissions || []) as string[]
-      if (!perms.includes('webRequestBlocking')) return
+      if (!perms.includes('webRequestBlocking') && !perms.includes('webRequestAuthProvider')) {
+        return
+      }
     }
 
+    this.onAuthRequiredListeners = this.onAuthRequiredListeners.filter(
+      (e) => e.extensionId !== extension.id,
+    )
     this.onAuthRequiredListeners.push({
       id: `wr-${++this.listenerIdCounter}`,
       extensionId: extension.id,
@@ -434,21 +460,35 @@ export class WebRequestAPI {
     return {}
   }
 
+  private extractAuthCredentialsFromBlockingResult(
+    r: WebRequestBlockingResponse | undefined,
+  ): { username: string; password: string } | undefined {
+    if (!r || r.cancel === true) return undefined
+    const ac = r.authCredentials as { username?: string; password?: string } | undefined
+    if (ac && (ac.username != null || ac.password != null)) {
+      return { username: ac.username ?? '', password: ac.password ?? '' }
+    }
+    const any = r as Record<string, unknown>
+    if (typeof any.username === 'string' || typeof any.password === 'string') {
+      return {
+        username: typeof any.username === 'string' ? any.username : '',
+        password: typeof any.password === 'string' ? any.password : '',
+      }
+    }
+    return undefined
+  }
+
   private mergeAuthRequired(
     results: Map<string, WebRequestBlockingResponse>,
   ): WebRequestBlockingResponse {
     for (const r of results.values()) {
-      if (r.cancel === true) return { cancel: true }
+      const creds = this.extractAuthCredentialsFromBlockingResult(r)
+      if (creds && (creds.username !== '' || creds.password !== '')) {
+        return { authCredentials: creds }
+      }
     }
     for (const r of results.values()) {
-      if (r.authCredentials?.username != null || r.authCredentials?.password != null) {
-        return {
-          authCredentials: {
-            username: r.authCredentials?.username || '',
-            password: r.authCredentials?.password || '',
-          },
-        }
-      }
+      if (r?.cancel === true) return { cancel: true }
     }
     return {}
   }
@@ -561,7 +601,62 @@ export class WebRequestAPI {
         /* continue */
       }
     }
+    if (typeof ref === 'string' && ref.startsWith('chrome-extension://')) {
+      try {
+        new URL(ref)
+        return ref
+      } catch {
+        /* continue */
+      }
+    }
+    try {
+      const frameUrl = details.frame?.url
+      if (typeof frameUrl === 'string' && frameUrl.startsWith('chrome-extension://')) {
+        return frameUrl
+      }
+    } catch {
+      /* continue */
+    }
+    try {
+      const wc = details.webContents
+      if (wc && typeof wc.isDestroyed === 'function' && !wc.isDestroyed()) {
+        const u = wc.getURL()
+        if (u.startsWith('chrome-extension://')) return u
+      }
+    } catch {
+      /* continue */
+    }
+    if (typeof wid === 'number') {
+      try {
+        const wc = electronWebContents.fromId(wid)
+        if (wc && !wc.isDestroyed()) {
+          const u = wc.getURL()
+          if (u.startsWith('chrome-extension://')) return u
+        }
+      } catch {
+        /* continue */
+      }
+    }
     return undefined
+  }
+
+  private extensionIdFromChromeInitiator(initiator?: string): string | undefined {
+    if (!initiator || !initiator.startsWith('chrome-extension://')) return undefined
+    try {
+      const h = new URL(initiator).hostname
+      return h || undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  private scopeListenersToInitiatorExtension<T extends { extensionId: string }>(
+    listeners: T[],
+    initiator?: string,
+  ): T[] {
+    const ext = this.extensionIdFromChromeInitiator(initiator)
+    if (!ext) return listeners
+    return listeners.filter((e) => e.extensionId === ext)
   }
 
   private buildDetails(
@@ -770,7 +865,10 @@ export class WebRequestAPI {
       }
     }
 
-    const matching = this.findMatchingListeners(this.onBeforeRequestListeners, probe)
+    const matching = this.scopeListenersToInitiatorExtension(
+      this.findMatchingListeners(this.onBeforeRequestListeners, probe),
+      probe.initiator,
+    )
     if (matching.length === 0) return {}
 
     const wantsRequestBody = matching.some((e) => {
@@ -852,7 +950,10 @@ export class WebRequestAPI {
       requestHeaders: details.requestHeaders as any,
     }
 
-    const matching = this.findMatchingListeners(this.onBeforeSendHeadersListeners, payloadBase)
+    const matching = this.scopeListenersToInitiatorExtension(
+      this.findMatchingListeners(this.onBeforeSendHeadersListeners, payloadBase),
+      payloadBase.initiator,
+    )
     if (matching.length === 0) return {}
 
     const hasBlocking = matching.some((e) => {
@@ -955,7 +1056,10 @@ export class WebRequestAPI {
       responseHeaders: details.responseHeaders as any,
     }
 
-    const matching = this.findMatchingListeners(this.onHeadersReceivedListeners, payloadBase)
+    const matching = this.scopeListenersToInitiatorExtension(
+      this.findMatchingListeners(this.onHeadersReceivedListeners, payloadBase),
+      payloadBase.initiator,
+    )
     if (matching.length === 0) return {}
 
     const hasBlocking = matching.some((e) => {

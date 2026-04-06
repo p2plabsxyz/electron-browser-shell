@@ -115,6 +115,28 @@ export const injectExtensionAPIs = () => {
     const chrome: any = (globalThis as any).chrome || {}
     const extensionId = chrome.runtime?.id
 
+    // `no-cache` still revalidates; 304 has no body and Electron MV3 SW can surface
+    // an empty body. Treat as no-store so responses include full entity bytes.
+    try {
+      const g = globalThis as any
+      const nativeFetch = g.fetch?.bind(g)
+      if (typeof nativeFetch === 'function' && g.fetch !== undefined) {
+        g.fetch = function (input: any, init?: RequestInit) {
+          if (init && init.cache === 'no-cache') {
+            return nativeFetch(input, { ...init, cache: 'no-store' })
+          }
+          if (typeof Request !== 'undefined' && input instanceof Request) {
+            if (input.cache === 'no-cache' && (init === undefined || init.cache === undefined)) {
+              return nativeFetch(new Request(input, { cache: 'no-store' }), init)
+            }
+          }
+          return nativeFetch(input, init)
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+
     // NOTE: This uses a synchronous IPC to get the extension manifest.
     // To avoid this, JS bindings for RendererExtensionRegistry would be
     // required.
@@ -180,11 +202,33 @@ export const injectExtensionAPIs = () => {
 
     // chrome.types.ChromeSetting<any>
     class ChromeSetting {
-      set() {}
-      get() {}
-      clear() {}
+      private value: any = undefined
+
+      get(_details?: any, cb?: Function) {
+        const result = {
+          value: this.value,
+          levelOfControl: 'controllable_by_this_extension' as const,
+        }
+        if (typeof cb === 'function') cb(result)
+        return result
+      }
+
+      set(details?: any, cb?: Function) {
+        if (details && typeof details === 'object' && 'value' in details) {
+          this.value = details.value
+        }
+        if (typeof cb === 'function') cb()
+      }
+
+      clear(_details?: any, cb?: Function) {
+        this.value = undefined
+        if (typeof cb === 'function') cb()
+      }
+
       onChange = {
         addListener: () => {},
+        removeListener: () => {},
+        hasListener: () => false,
       }
     }
 
