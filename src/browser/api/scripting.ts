@@ -59,6 +59,9 @@ export class ScriptingAPI {
 
     const funcSrc =
       typeof injection.func === 'string' ? injection.func : String(injection.func ?? '')
+    if (!funcSrc.trim()) {
+      throw new Error('executeScript: func is required')
+    }
     const args = Array.isArray(injection.args) ? injection.args : []
     const frame = resolveFrame(tab, injection?.target?.frameIds as number[] | undefined)
     if (!frame || frame.isDestroyed()) {
@@ -68,7 +71,8 @@ export class ScriptingAPI {
     const code = `(function(){ const __a = ${JSON.stringify(args)}; var fn = ${funcSrc}; return fn.apply(null, __a); })()`
 
     const world = injection.world
-    const isolated = world === 'ISOLATED' || world === 0
+    // Chrome defaults to ISOLATED; MAIN must be explicit.
+    const isolated = world !== 'MAIN' && world !== 1
 
     if (isolated && frame === frame.top && typeof tab.executeJavaScriptInIsolatedWorld === 'function') {
       const out = await tab.executeJavaScriptInIsolatedWorld(ISOLATED_WORLD, [{ code }], true)

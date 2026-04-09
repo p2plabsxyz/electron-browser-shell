@@ -732,6 +732,9 @@ export const injectExtensionAPIs = () => {
               return fn(...args)
             }
 
+          // Per-area onChanged is required by real extensions (e.g. Dark Reader uses
+          // chrome.storage.local.onChanged). It aliases the same listeners as
+          // chrome.storage.onChanged; the event payload includes the storage area.
           const ipcLocal = {
             get: cbWrap(invokeExtension('storage.local.get')),
             set: cbWrap(invokeExtension('storage.local.set')),
@@ -750,6 +753,7 @@ export const injectExtensionAPIs = () => {
             session: (base as any)?.session || ipcLocal,
             sync: {
               ...(base as any)?.sync ?? ipcLocal,
+              onChanged,
               get: cbWrap(invokeExtension('storage.sync.get')),
               set: cbWrap(invokeExtension('storage.sync.set')),
               remove: cbWrap(invokeExtension('storage.sync.remove')),

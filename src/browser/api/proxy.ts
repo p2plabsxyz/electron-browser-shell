@@ -58,7 +58,7 @@ export class ProxyAPI {
     await this.applyProxyConfig(config)
     this.currentConfig = config
     this.controllingExtensionId = extension.id
-    this.emitSettingsChange(extension.id)
+    this.emitSettingsChange()
   }
 
   private settingsClear = async (): Promise<void> => {
@@ -203,16 +203,22 @@ export class ProxyAPI {
     return hostPort
   }
 
-  private emitSettingsChange(targetExtensionId?: string): void {
-    const levelOfControl: chrome.types.LevelOfControl =
-      targetExtensionId && this.controllingExtensionId === targetExtensionId
-        ? 'controlled_by_this_extension'
-        : 'controllable_by_this_extension'
+  private emitSettingsChange(): void {
+    this.ctx.router.sendEventForEachListener('proxy.settings.onChange', (extensionId) => {
+      const levelOfControl: chrome.types.LevelOfControl =
+        !this.controllingExtensionId
+          ? 'controllable_by_this_extension'
+          : this.controllingExtensionId === extensionId
+            ? 'controlled_by_this_extension'
+            : 'controlled_by_other_extensions'
 
-    this.ctx.router.sendEvent(targetExtensionId, 'proxy.settings.onChange', {
-      value: this.currentConfig,
-      levelOfControl,
-      incognitoSpecific: false,
+      return [
+        {
+          value: this.currentConfig,
+          levelOfControl,
+          incognitoSpecific: false,
+        },
+      ]
     })
   }
 }

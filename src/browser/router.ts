@@ -506,6 +506,83 @@ export class ExtensionRouter {
   }
 
   /**
+   * Delivers an event to every listener for `eventName`, using a different
+   * argument list per extension (e.g. chrome.types.ChromeSettingGetDetails).
+   */
+  sendEventForEachListener(eventName: string, mapArgs: (extensionId: string) => any[]) {
+    const { listeners } = this
+    const eventListeners = listeners.get(eventName)
+    const ipcName = `crx-${eventName}`
+
+    if (!eventListeners || eventListeners.length === 0) {
+      d(`sendEventForEachListener: no listeners for '${eventName}'`)
+      return
+    }
+
+    const deadListeners: EventListener[] = []
+    let sentCount = 0
+    let serviceWorkerAsync = 0
+    for (const listener of eventListeners) {
+      const { type, extensionId } = listener
+      const args = mapArgs(extensionId)
+
+      if (type === 'service-worker') {
+        serviceWorkerAsync++
+        const scope = `chrome-extension://${extensionId}/`
+        const argsCopy = [...args]
+        this.session.serviceWorkers
+          .startWorkerForScope(scope)
+          .then((serviceWorker) => {
+            setTimeout(() => {
+              if (!serviceWorker || (serviceWorker as any).isDestroyed?.()) return
+              try {
+                serviceWorker.send(ipcName, ...argsCopy)
+                d(`delivered '${eventName}' to service worker [${extensionId}]`)
+              } catch (err) {
+                d('service worker send failed for %s: %o', eventName, err)
+              }
+            }, 200)
+          })
+          .catch((error) => {
+            d('failed to send %s to %s', eventName, extensionId)
+            console.error(error)
+          })
+      } else {
+        if (listener.host.isDestroyed()) {
+          deadListeners.push(listener)
+          continue
+        }
+        try {
+          listener.host.send(ipcName, ...args)
+          sentCount++
+        } catch (err) {
+          d('send %s to extension %s failed (host may be tearing down): %o', eventName, extensionId, err)
+          deadListeners.push(listener)
+        }
+      }
+    }
+
+    if (deadListeners.length > 0) {
+      const deadSet = new Set(deadListeners)
+      const filtered = eventListeners.filter((l) => !deadSet.has(l))
+      if (filtered.length > 0) {
+        listeners.set(eventName, filtered)
+      } else {
+        listeners.delete(eventName)
+      }
+      d(`removed ${deadListeners.length} dead listener(s) for '${eventName}'`)
+    }
+
+    if (serviceWorkerAsync > 0) {
+      d(
+        `sendEventForEachListener '${eventName}': ${sentCount} frame host(s); ${serviceWorkerAsync} service worker delivery(s) scheduled`,
+      )
+    } else {
+      d(`sendEventForEachListener '${eventName}' event to ${sentCount} listeners`)
+    }
+  }
+
+  /**
    * For action-click events: MV3 service workers start lazily. When the host
    * triggers a click for an extension that has not yet run its worker, no listener exists.
    * Start the worker for the target extension and deliver the event after it has had time to

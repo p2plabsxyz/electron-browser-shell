@@ -4,11 +4,28 @@ import path from 'node:path'
 import { ExtensionContext } from '../context'
 import { ExtensionEvent } from '../router'
 
+const FORBIDDEN_STORAGE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
+
+function isForbiddenStorageKey(key: string): boolean {
+  return FORBIDDEN_STORAGE_KEYS.has(key)
+}
+
+function sanitizeLoadedStorage(raw: Record<string, any>): Record<string, any> {
+  const out: Record<string, any> = {}
+  for (const k of Object.keys(raw)) {
+    if (isForbiddenStorageKey(k)) continue
+    out[k] = raw[k]
+  }
+  return out
+}
+
 export class StorageSyncAPI {
   private baseDir: string
   private localBaseDir: string
   private ready: Promise<void>
   private localReady: Promise<void>
+  private chainSync = new Map<string, Promise<unknown>>()
+  private chainLocal = new Map<string, Promise<unknown>>()
 
   constructor(private ctx: ExtensionContext) {
     this.baseDir = path.join(app.getPath('userData'), 'extension-sync')
@@ -27,6 +44,20 @@ export class StorageSyncAPI {
     handle('storage.local.remove', this.localRemove, { permission: 'storage' })
     handle('storage.local.clear', this.localClear, { permission: 'storage' })
     handle('storage.local.getBytesInUse', this.localGetBytesInUse, { permission: 'storage' })
+  }
+
+  private enqueueSync<T>(extensionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.chainSync.get(extensionId) ?? Promise.resolve()
+    const next = prev.then(() => fn(), () => fn())
+    this.chainSync.set(extensionId, next)
+    return next
+  }
+
+  private enqueueLocal<T>(extensionId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.chainLocal.get(extensionId) ?? Promise.resolve()
+    const next = prev.then(() => fn(), () => fn())
+    this.chainLocal.set(extensionId, next)
+    return next
   }
 
   private getFilePath = (extensionId: string) => {
@@ -55,10 +86,20 @@ export class StorageSyncAPI {
       const utf8 = buffer.toString('utf-8')
       const firstNonWs = utf8.match(/[^\s]/)?.[0]
       if (firstNonWs === '{' || firstNonWs === '[') {
-        return JSON.parse(utf8)
+        const parsed = JSON.parse(utf8)
+        return sanitizeLoadedStorage(
+          typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+            ? (parsed as Record<string, any>)
+            : {},
+        )
       }
       if (safeStorage.isEncryptionAvailable()) {
-        return JSON.parse(safeStorage.decryptString(buffer))
+        const parsed = JSON.parse(safeStorage.decryptString(buffer))
+        return sanitizeLoadedStorage(
+          typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+            ? (parsed as Record<string, any>)
+            : {},
+        )
       }
       throw new Error('Encrypted storage unavailable')
     } catch (err: any) {
@@ -84,19 +125,29 @@ export class StorageSyncAPI {
     await fs.rename(tmpPath, filePath)
   }
 
-  private get = async ({ extension }: ExtensionEvent, keys?: string | string[] | Record<string, any> | null) => {
+  private get = async (event: ExtensionEvent, keys?: string | string[] | Record<string, any> | null) => {
+    return this.enqueueSync(event.extension.id, () => this.getImpl(event, keys))
+  }
+
+  private getImpl = async (
+    { extension }: ExtensionEvent,
+    keys?: string | string[] | Record<string, any> | null,
+  ) => {
     const data = await this.load(extension.id)
     if (keys == null) return data
 
     const result: Record<string, any> = {}
     if (typeof keys === 'string') {
+      if (isForbiddenStorageKey(keys)) return result
       if (keys in data) result[keys] = data[keys]
     } else if (Array.isArray(keys)) {
       keys.forEach(k => {
+        if (isForbiddenStorageKey(k)) return
         if (k in data) result[k] = data[k]
       })
     } else {
       Object.entries(keys).forEach(([k, defaultVal]) => {
+        if (isForbiddenStorageKey(k)) return
         result[k] = k in data ? data[k] : defaultVal
       })
     }
@@ -104,6 +155,10 @@ export class StorageSyncAPI {
   }
 
   private set = async ({ extension }: ExtensionEvent, items: Record<string, any>) => {
+    return this.enqueueSync(extension.id, () => this.setImpl({ extension } as ExtensionEvent, items))
+  }
+
+  private setImpl = async ({ extension }: ExtensionEvent, items: Record<string, any>) => {
     const data = await this.load(extension.id)
     const changes: Record<string, chrome.storage.StorageChange> = {}
 
@@ -112,6 +167,9 @@ export class StorageSyncAPI {
     }
 
     Object.entries(items).forEach(([k, v]) => {
+      if (isForbiddenStorageKey(k)) {
+        throw new Error('Invalid storage key')
+      }
       let same = false
       if (typeof v === 'object' && v !== null) {
         try {
@@ -136,12 +194,17 @@ export class StorageSyncAPI {
   }
 
   private remove = async ({ extension }: ExtensionEvent, keys: string | string[]) => {
+    return this.enqueueSync(extension.id, () => this.removeImpl({ extension } as ExtensionEvent, keys))
+  }
+
+  private removeImpl = async ({ extension }: ExtensionEvent, keys: string | string[]) => {
     if (!keys) return
     const data = await this.load(extension.id)
     const changes: Record<string, chrome.storage.StorageChange> = {}
 
     const toDelete = Array.isArray(keys) ? keys : [keys]
     toDelete.forEach(k => {
+      if (isForbiddenStorageKey(k)) return
       if (k in data) {
         changes[k] = { oldValue: data[k] }
         delete data[k]
@@ -155,6 +218,10 @@ export class StorageSyncAPI {
   }
 
   private clear = async ({ extension }: ExtensionEvent) => {
+    return this.enqueueSync(extension.id, () => this.clearImpl({ extension } as ExtensionEvent))
+  }
+
+  private clearImpl = async ({ extension }: ExtensionEvent) => {
     const data = await this.load(extension.id)
     const changes: Record<string, chrome.storage.StorageChange> = {}
 
@@ -169,8 +236,10 @@ export class StorageSyncAPI {
   }
 
   private getBytesInUse = async ({ extension }: ExtensionEvent, keys?: string | string[] | null) => {
-    const result = await this.get({ extension } as ExtensionEvent, keys)
-    return Buffer.byteLength(JSON.stringify(result))
+    return this.enqueueSync(extension.id, async () => {
+      const result = await this.getImpl({ extension } as ExtensionEvent, keys)
+      return Buffer.byteLength(JSON.stringify(result))
+    })
   }
 
   private localLoad = async (extensionId: string): Promise<Record<string, any>> => {
@@ -189,10 +258,20 @@ export class StorageSyncAPI {
       const utf8 = buffer.toString('utf-8')
       const firstNonWs = utf8.match(/[^\s]/)?.[0]
       if (firstNonWs === '{' || firstNonWs === '[') {
-        return JSON.parse(utf8)
+        const parsed = JSON.parse(utf8)
+        return sanitizeLoadedStorage(
+          typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+            ? (parsed as Record<string, any>)
+            : {},
+        )
       }
       if (safeStorage.isEncryptionAvailable()) {
-        return JSON.parse(safeStorage.decryptString(buffer))
+        const parsed = JSON.parse(safeStorage.decryptString(buffer))
+        return sanitizeLoadedStorage(
+          typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+            ? (parsed as Record<string, any>)
+            : {},
+        )
       }
       throw new Error('Encrypted storage unavailable')
     } catch (err: any) {
@@ -219,17 +298,27 @@ export class StorageSyncAPI {
   }
 
   private localGet = async ({ extension }: ExtensionEvent, keys?: string | string[] | Record<string, any> | null) => {
+    return this.enqueueLocal(extension.id, () => this.localGetImpl({ extension } as ExtensionEvent, keys))
+  }
+
+  private localGetImpl = async (
+    { extension }: ExtensionEvent,
+    keys?: string | string[] | Record<string, any> | null,
+  ) => {
     const data = await this.localLoad(extension.id)
     if (keys == null) return data
     const result: Record<string, any> = {}
     if (typeof keys === 'string') {
+      if (isForbiddenStorageKey(keys)) return result
       if (keys in data) result[keys] = data[keys]
     } else if (Array.isArray(keys)) {
       keys.forEach(k => {
+        if (isForbiddenStorageKey(k)) return
         if (k in data) result[k] = data[k]
       })
     } else {
       Object.entries(keys).forEach(([k, defaultVal]) => {
+        if (isForbiddenStorageKey(k)) return
         result[k] = k in data ? data[k] : defaultVal
       })
     }
@@ -237,6 +326,10 @@ export class StorageSyncAPI {
   }
 
   private localSet = async ({ extension }: ExtensionEvent, items: Record<string, any>) => {
+    return this.enqueueLocal(extension.id, () => this.localSetImpl({ extension } as ExtensionEvent, items))
+  }
+
+  private localSetImpl = async ({ extension }: ExtensionEvent, items: Record<string, any>) => {
     const data = await this.localLoad(extension.id)
     const changes: Record<string, chrome.storage.StorageChange> = {}
 
@@ -245,6 +338,9 @@ export class StorageSyncAPI {
     }
 
     Object.entries(items).forEach(([k, v]) => {
+      if (isForbiddenStorageKey(k)) {
+        throw new Error('Invalid storage key')
+      }
       let same = false
       if (typeof v === 'object' && v !== null) {
         try {
@@ -269,11 +365,16 @@ export class StorageSyncAPI {
   }
 
   private localRemove = async ({ extension }: ExtensionEvent, keys: string | string[]) => {
+    return this.enqueueLocal(extension.id, () => this.localRemoveImpl({ extension } as ExtensionEvent, keys))
+  }
+
+  private localRemoveImpl = async ({ extension }: ExtensionEvent, keys: string | string[]) => {
     if (!keys) return
     const data = await this.localLoad(extension.id)
     const changes: Record<string, chrome.storage.StorageChange> = {}
     const toDelete = Array.isArray(keys) ? keys : [keys]
     toDelete.forEach(k => {
+      if (isForbiddenStorageKey(k)) return
       if (k in data) {
         changes[k] = { oldValue: data[k] }
         delete data[k]
@@ -286,6 +387,10 @@ export class StorageSyncAPI {
   }
 
   private localClear = async ({ extension }: ExtensionEvent) => {
+    return this.enqueueLocal(extension.id, () => this.localClearImpl({ extension } as ExtensionEvent))
+  }
+
+  private localClearImpl = async ({ extension }: ExtensionEvent) => {
     const data = await this.localLoad(extension.id)
     const changes: Record<string, chrome.storage.StorageChange> = {}
     Object.keys(data).forEach(k => {
@@ -298,7 +403,9 @@ export class StorageSyncAPI {
   }
 
   private localGetBytesInUse = async ({ extension }: ExtensionEvent, keys?: string | string[] | null) => {
-    const result = await this.localGet({ extension } as ExtensionEvent, keys)
-    return Buffer.byteLength(JSON.stringify(result))
+    return this.enqueueLocal(extension.id, async () => {
+      const result = await this.localGetImpl({ extension } as ExtensionEvent, keys)
+      return Buffer.byteLength(JSON.stringify(result))
+    })
   }
 }
