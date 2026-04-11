@@ -4,6 +4,9 @@ import { ExtensionEvent } from '../router'
 
 const redirectDomain = 'chromiumapp.org'
 
+/** Chromium: https://<id>.chromiumapp.org/ is resolved internally (no real DNS). Electron resolves normally → ERR_NAME_NOT_RESOLVED (-105). */
+const ERR_NAME_NOT_RESOLVED = -105
+
 /** Chrome extension OAuth redirect URL prefix: https://<extensionId>.chromiumapp.org/ */
 function getRedirectUrlPrefix(extensionId: string): string {
   return `https://${extensionId}.${redirectDomain}/`
@@ -56,14 +59,22 @@ export class IdentityAPI {
             wc.removeListener('will-redirect', onRedirect)
             wc.removeListener('will-navigate', onWillNavigate)
             wc.removeListener('did-navigate', onNavigate)
+            wc.removeListener('did-fail-load', onDidFailLoad)
           }
           win.destroy()
         }
       }
 
+      const callbackHost = `${extensionId}.${redirectDomain}`
+
       const checkRedirect = (targetUrl: string): boolean => {
         if (!targetUrl || typeof targetUrl !== 'string') return false
-        return targetUrl.startsWith(redirectPrefix)
+        if (targetUrl.startsWith(redirectPrefix)) return true
+        try {
+          return new URL(targetUrl).hostname === callbackHost
+        } catch {
+          return false
+        }
       }
 
       const captureAndResolve = (callbackUrl: string) => {
@@ -92,6 +103,19 @@ export class IdentityAPI {
         if (checkRedirect(navUrl)) captureAndResolve(navUrl)
       }
 
+      /** When the redirect target is *.chromiumapp.org, DNS fails before will-redirect in some cases; validated URL is still the OAuth callback. */
+      const onDidFailLoad = (
+        _event: Electron.Event,
+        errorCode: number,
+        _errorDescription: string,
+        validatedURL: string,
+        isMainFrame: boolean,
+      ) => {
+        if (!isMainFrame) return
+        if (errorCode !== ERR_NAME_NOT_RESOLVED) return
+        if (checkRedirect(validatedURL)) captureAndResolve(validatedURL)
+      }
+
       const onClosed = () => {
         cleanup()
         reject(new Error('User closed the OAuth window'))
@@ -100,6 +124,7 @@ export class IdentityAPI {
       win.webContents.on('will-redirect', onRedirect)
       win.webContents.on('will-navigate', onWillNavigate)
       win.webContents.on('did-navigate', onNavigate)
+      win.webContents.on('did-fail-load', onDidFailLoad)
       win.on('closed', onClosed)
 
       if (shouldShow) {
