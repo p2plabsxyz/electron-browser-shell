@@ -9,8 +9,8 @@ describe('chrome.storage.sync', () => {
   })
 
   beforeEach(async () => {
-    // Clear storage before each test
     await browser.crx.exec('storage.sync.clear')
+    await new Promise<void>((resolve) => setTimeout(resolve, 50))
   })
 
   describe('set() and get()', () => {
@@ -86,12 +86,11 @@ describe('chrome.storage.sync', () => {
 
   describe('onChanged event', () => {
     it('fires when storage is updated', async () => {
-      // Create a promise that waits for the onChanged event
       const eventPromise = browser.crx.eventOnce('storage.onChanged')
-      
       await browser.crx.exec('storage.sync.set', { newVal: 'test' })
-      
-      const [changes, areaName] = await eventPromise
+      const payload = await eventPromise
+      expect(payload).to.be.an('array')
+      const [changes, areaName] = payload as [Record<string, unknown>, string]
       expect(areaName).to.equal('sync')
       expect(changes).to.have.property('newVal')
       expect(changes.newVal).to.deep.equal({ newValue: 'test' })
@@ -99,11 +98,15 @@ describe('chrome.storage.sync', () => {
 
     it('fires when storage is removed', async () => {
       await browser.crx.exec('storage.sync.set', { toBeRemoved: 123 })
-      
+      // Let the onChanged from `set` flush so event-once only observes `remove`.
+      await new Promise<void>((resolve) => setTimeout(resolve, 50))
+
       const eventPromise = browser.crx.eventOnce('storage.onChanged')
       await browser.crx.exec('storage.sync.remove', 'toBeRemoved')
       
-      const [changes, areaName] = await eventPromise
+      const payload = await eventPromise
+      expect(payload).to.be.an('array')
+      const [changes, areaName] = payload as [Record<string, unknown>, string]
       expect(areaName).to.equal('sync')
       expect(changes).to.have.property('toBeRemoved')
       expect(changes.toBeRemoved).to.deep.equal({ oldValue: 123 })

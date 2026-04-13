@@ -12,6 +12,16 @@ function getRedirectUrlPrefix(extensionId: string): string {
   return `https://${extensionId}.${redirectDomain}/`
 }
 
+/** Allow https everywhere; allow http only on loopback (common OAuth dev / local test servers). */
+function isAllowedLaunchWebAuthFlowUrl(u: URL): boolean {
+  if (u.protocol === 'https:') return true
+  if (u.protocol === 'http:') {
+    const h = u.hostname.toLowerCase()
+    return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1'
+  }
+  return false
+}
+
 export class IdentityAPI {
   constructor(private ctx: ExtensionContext) {
     const handle = this.ctx.router.apiHandler()
@@ -40,9 +50,9 @@ export class IdentityAPI {
     } catch {
       throw new Error('chrome.identity.launchWebAuthFlow: options.url must be a valid URL')
     }
-    if (parsedUrl.protocol !== 'https:') {
+    if (!isAllowedLaunchWebAuthFlowUrl(parsedUrl)) {
       throw new Error(
-        'chrome.identity.launchWebAuthFlow: options.url must use https protocol',
+        'chrome.identity.launchWebAuthFlow: options.url must be https, or http on localhost/127.0.0.1 only',
       )
     }
 

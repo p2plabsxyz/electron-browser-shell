@@ -48,11 +48,7 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       if (typeof chrome[apiName][eventName] === 'object') {
         const event = chrome[apiName][eventName]
         event.addListener(function callback(...args) {
-          if (chrome.runtime.lastError) {
-            reply(chrome.runtime.lastError)
-          } else {
-            reply(args)
-          }
+          reply(args)
           event.removeListener(callback)
         })
       }

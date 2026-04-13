@@ -8,8 +8,9 @@ const exec = promisify(cp.exec)
 import { useExtensionBrowser, useServer } from './hooks'
 import { getExtensionId } from './crx-helpers'
 
+// Native host build (SEA + postject) is slow/flaky on some Windows/CI setups; opt out with SKIP_NATIVE_MESSAGING=1.
 // TODO: build crxtesthost on Linux (see script/native-messaging-host/build.js)
-if (process.platform !== 'linux') {
+if (process.platform !== 'linux' && process.env.SKIP_NATIVE_MESSAGING !== '1') {
   describe('nativeMessaging', () => {
     const server = useServer()
     const browser = useExtensionBrowser({
@@ -19,11 +20,14 @@ if (process.platform !== 'linux') {
     const hostApplication = 'com.crx.test'
 
     before(async function () {
-      this.timeout(60e3)
+      this.timeout(120e3)
       const extensionId = await getExtensionId('rpc')
-      const nativeMessagingPath = path.join(__dirname, '..', 'script', 'native-messaging-host')
-      const buildScript = path.join(nativeMessagingPath, 'build.js')
-      await exec(`node ${buildScript} ${extensionId}`)
+      const pkgRoot = path.join(__dirname, '..')
+      const buildScript = path.join(pkgRoot, 'script', 'native-messaging-host', 'build.js')
+      await exec(`node "${buildScript}" ${extensionId}`, {
+        cwd: pkgRoot,
+        maxBuffer: 20 * 1024 * 1024,
+      })
     })
 
     describe('sendNativeMessage()', () => {

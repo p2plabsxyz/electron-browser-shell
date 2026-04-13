@@ -62,11 +62,9 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
       if (target && target[eventName]) {
         const event = target[eventName]
         event.addListener(function callback(...args) {
-          if (chrome.runtime.lastError) {
-            reply(chrome.runtime.lastError)
-          } else {
-            reply(args)
-          }
+          // Do not branch on chrome.runtime.lastError here: it can be stale from unrelated API calls
+          // and is not a reliable signal for event listeners (breaks sendMessage payload shape).
+          reply(args)
           event.removeListener(callback)
         })
       } else {
