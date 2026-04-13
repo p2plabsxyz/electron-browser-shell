@@ -147,7 +147,7 @@ export class IdentityAPI {
         })
       }
 
-      win.loadURL(url).catch((err) => {
+      win.loadURL(parsedUrl.toString()).catch((err) => {
         cleanup()
         reject(new Error(`Failed to load OAuth URL: ${err.message}`))
       })
