@@ -20,6 +20,7 @@ export class PermissionsAPI {
     handle('permissions.getAll', this.getAll)
     handle('permissions.remove', this.remove)
     handle('permissions.request', this.request)
+    this.ctx.router.setPermissionResolver(this.hasPermission)
 
     const sessionExtensions = ctx.session.extensions || ctx.session
     sessionExtensions.getAllExtensions().forEach((ext) => this.processExtension(ext))
@@ -39,6 +40,14 @@ export class PermissionsAPI {
       permissions: (manifest.permissions || []) as chrome.runtime.ManifestPermissions[],
       origins: manifest.host_permissions || [],
     })
+  }
+
+  private hasPermission = (
+    extensionId: string,
+    permission: chrome.runtime.ManifestPermissions,
+  ): boolean => {
+    const currentPermissions = this.permissionMap.get(extensionId)
+    return !!currentPermissions?.permissions.includes(permission)
   }
 
   private contains = (

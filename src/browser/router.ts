@@ -224,6 +224,10 @@ const eventListenerEquals = (a: EventListener) => (b: EventListener) => {
 export class ExtensionRouter {
   private handlers: HandlerMap = new Map()
   private listeners: Map<EventName, EventListener[]> = new Map()
+  private permissionResolver?: (
+    extensionId: string,
+    permission: chrome.runtime.ManifestPermissions,
+  ) => boolean
 
   /**
    * Collection of all extension hosts in the session.
@@ -358,6 +362,12 @@ export class ExtensionRouter {
     return handler
   }
 
+  setPermissionResolver(
+    resolver: (extensionId: string, permission: chrome.runtime.ManifestPermissions) => boolean,
+  ) {
+    this.permissionResolver = resolver
+  }
+
   async onExtensionMessage(
     event: IpcInvokeEvent,
     extensionId: string | undefined,
@@ -380,7 +390,11 @@ export class ExtensionRouter {
 
     if (handler.permission) {
       const manifest: chrome.runtime.Manifest = extension?.manifest
-      if (!extension || !manifest.permissions?.includes(handler.permission)) {
+      const hasManifestPermission = !!manifest.permissions?.includes(handler.permission)
+      const hasGrantedPermission =
+        !!extension &&
+        !!this.permissionResolver?.(extension.id, handler.permission as chrome.runtime.ManifestPermissions)
+      if (!extension || (!hasManifestPermission && !hasGrantedPermission)) {
         throw new Error(
           `${handlerName} requires an extension with ${handler.permission} permissions`,
         )
