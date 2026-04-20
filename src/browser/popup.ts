@@ -50,6 +50,10 @@ export class PopupView extends EventEmitter {
 
   private readyPromise: Promise<void>
 
+  /** Delay blur listener so transient focus changes during show/load do not close the popup. */
+  private blurCloseTimer: ReturnType<typeof setTimeout> | null = null
+  private blurListenerAttached = false
+
   constructor(opts: PopupViewOptions) {
     super()
 
@@ -85,10 +89,7 @@ export class PopupView extends EventEmitter {
     untypedWebContents.on('preferred-size-changed', this.updatePreferredSize)
 
     this.browserWindow.webContents.on('devtools-closed', this.maybeClose)
-    // NOTE: Don't auto-destroy popups on blur.
-    // On Windows/Electron, focus can transiently move during popup creation
-    // and immediately trigger blur, which makes extension popups appear to
-    // "not open". Peersky has its own popup lifecycle management.
+    // Close when focus leaves the popup
     this.browserWindow.on('closed', this.destroy)
     this.parent.once('closed', this.destroy)
 
@@ -98,6 +99,57 @@ export class PopupView extends EventEmitter {
   private show() {
     this.hidden = false
     this.browserWindow?.show()
+    this.armBlurClose()
+  }
+
+  private armBlurClose() {
+    if (this.blurCloseTimer != null || this.blurListenerAttached || this.destroyed || !this.browserWindow) return
+    this.blurCloseTimer = setTimeout(() => {
+      this.blurCloseTimer = null
+      if (this.destroyed || !this.browserWindow) return
+      this.browserWindow.on('blur', this.onPopupBlur)
+      this.blurListenerAttached = true
+    }, 300)
+  }
+
+  private detachBlurClose() {
+    if (this.blurCloseTimer != null) {
+      clearTimeout(this.blurCloseTimer)
+      this.blurCloseTimer = null
+    }
+    if (this.browserWindow && !this.browserWindow.isDestroyed() && this.blurListenerAttached) {
+      this.browserWindow.off('blur', this.onPopupBlur)
+    }
+    this.blurListenerAttached = false
+  }
+
+  private onPopupBlur = () => {
+    if (this.destroyed) return
+    setImmediate(() => {
+      if (this.destroyed) return
+      const win = this.browserWindow
+      if (!win || win.isDestroyed()) return
+      const { webContents } = win
+      try {
+        if (webContents.isDevToolsOpened()) {
+          const devtoolsWc = webContents.devToolsWebContents
+          const focused = BrowserWindow.getFocusedWindow()
+          const focusedWc = focused?.webContents
+          if (
+            devtoolsWc &&
+            !devtoolsWc.isDestroyed() &&
+            focusedWc &&
+            focusedWc.id === devtoolsWc.id
+          ) {
+            return
+          }
+        }
+      } catch (_) {}
+      const focused = BrowserWindow.getFocusedWindow()
+      if (focused !== win) {
+        this.destroy()
+      }
+    })
   }
 
   private async load(url: string): Promise<void> {
@@ -135,6 +187,8 @@ export class PopupView extends EventEmitter {
     this.destroyed = true
 
     d(`destroying ${this.extensionId}`)
+
+    this.detachBlurClose()
 
     if (this.parent) {
       if (!this.parent.isDestroyed()) {
