@@ -1,4 +1,5 @@
 import { BrowserWindow, webContents } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { ContextMenuType } from './api/common'
 import { ChromeExtensionImpl } from './impl'
@@ -26,6 +27,18 @@ export class ExtensionStore extends EventEmitter {
 
   tabDetailsCache = new Map<number, Partial<chrome.tabs.Tab>>()
   windowDetailsCache = new Map<number, Partial<chrome.windows.Window>>()
+
+  private documentIdMap = new Map<string, string>()
+
+  newDocumentId(tabId: number, frameId: number): string {
+    const id = randomUUID().replace(/-/g, '').toUpperCase()
+    this.documentIdMap.set(`${tabId}:${frameId}`, id)
+    return id
+  }
+
+  getDocumentId(tabId: number, frameId: number): string | undefined {
+    return this.documentIdMap.get(`${tabId}:${frameId}`)
+  }
 
   urlOverrides: Record<string, string> = {}
 
@@ -146,7 +159,9 @@ export class ExtensionStore extends EventEmitter {
     this.tabs.delete(tab)
     this.tabToWindow.delete(tab)
 
-    // TODO: clear active tab
+    for (const key of this.documentIdMap.keys()) {
+      if (key.startsWith(`${tabId}:`)) this.documentIdMap.delete(key)
+    }
 
     // Clear window if it has no remaining tabs
     const windowHasTabs = Array.from(this.tabs).find((tab) => this.tabToWindow.get(tab) === win)
@@ -240,5 +255,25 @@ export class ExtensionStore extends EventEmitter {
     }
     const result: unknown = await this.impl.requestPermissions(extension, permissions)
     return typeof result === 'boolean' ? result : false
+  }
+
+  // Resolve WebContents id to the cached chrome.tabs tab id.
+  getTabIdForWebContentsId(webContentsId: number): number {
+    const tab = webContents.fromId(webContentsId)
+    if (!tab || tab.isDestroyed() || !this.tabs.has(tab)) return -1
+
+    const cached = this.tabDetailsCache.get(tab.id)
+    const cachedId = cached && typeof cached.id === 'number' ? cached.id : undefined
+    // tab.id is the WebContents id, so fallback to that if cache isn't ready yet.
+    return typeof cachedId === 'number' ? cachedId : tab.id
+  }
+
+  /** Window id for a tracked tab, for webRequest RequestFilter.windowId. */
+  getWindowIdForWebContentsId(webContentsId: number): number | undefined {
+    const tab = webContents.fromId(webContentsId)
+    if (!tab || tab.isDestroyed() || !this.tabs.has(tab)) return undefined
+    const win = this.tabToWindow.get(tab)
+    if (!win || win.isDestroyed()) return undefined
+    return win.id
   }
 }

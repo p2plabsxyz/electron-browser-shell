@@ -9,6 +9,10 @@ export class CommandsAPI {
     handle('commands.getAll', this.getAll)
 
     const sessionExtensions = ctx.session.extensions || ctx.session
+    sessionExtensions.getAllExtensions().forEach((extension) => {
+      this.processExtension(extension)
+    })
+
     sessionExtensions.on('extension-loaded', (_event, extension) => {
       this.processExtension(extension)
     })
@@ -20,21 +24,26 @@ export class CommandsAPI {
 
   private processExtension(extension: Electron.Extension) {
     const manifest: chrome.runtime.Manifest = extension.manifest
-    if (!manifest.commands) return
-
-    if (!this.commandMap.has(extension.id)) {
-      this.commandMap.set(extension.id, [])
+    if (!manifest.commands) {
+      this.commandMap.delete(extension.id)
+      return
     }
-    const commands = this.commandMap.get(extension.id)!
+
+    const commands: chrome.commands.Command[] = []
 
     for (const [name, details] of Object.entries(manifest.commands!)) {
-      // TODO: attempt to register commands
+      const manifestCommand = details as {
+        description?: string
+        suggested_key?: { default?: string }
+      }
       commands.push({
         name,
-        description: details.description,
-        shortcut: '',
+        description: manifestCommand.description,
+        shortcut: manifestCommand.suggested_key?.default || '',
       })
     }
+
+    this.commandMap.set(extension.id, commands)
   }
 
   private removeCommands(extension: Electron.Extension) {

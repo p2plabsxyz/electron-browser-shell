@@ -21,6 +21,29 @@ const createCookieDetails = (cookie: Electron.Cookie): chrome.cookies.Cookie => 
   storeId: CookieStoreID.Default,
 })
 
+const isSupportedStore = (storeId?: string) =>
+  storeId == null || storeId === CookieStoreID.Default
+
+const selectBestCookieMatch = (cookies: Electron.Cookie[]): Electron.Cookie | null => {
+  if (cookies.length === 0) return null
+  const ranked = cookies
+    .map((cookie, index) => ({ cookie, index }))
+    .sort((a, b) => {
+      const aPathLength = (a.cookie.path || '').length
+      const bPathLength = (b.cookie.path || '').length
+      if (aPathLength !== bPathLength) return bPathLength - aPathLength
+
+      const aCreation = Number((a.cookie as any).creation ?? 0)
+      const bCreation = Number((b.cookie as any).creation ?? 0)
+      if (!Number.isNaN(aCreation) && !Number.isNaN(bCreation) && aCreation !== bCreation) {
+        return aCreation - bCreation
+      }
+
+      return a.index - b.index
+    })
+  return ranked[0].cookie
+}
+
 export class CookiesAPI {
   private get cookies() {
     return this.ctx.session.cookies
@@ -41,23 +64,23 @@ export class CookiesAPI {
     event: ExtensionEvent,
     details: chrome.cookies.CookieDetails,
   ): Promise<chrome.cookies.Cookie | null> {
-    // TODO: storeId
+    if (!isSupportedStore(details.storeId)) return null
+
     const cookies = await this.cookies.get({
       url: details.url,
       name: details.name,
     })
 
-    // TODO: If more than one cookie of the same name exists for the given URL,
-    // the one with the longest path will be returned. For cookies with the
-    // same path length, the cookie with the earliest creation time will be returned.
-    return cookies.length > 0 ? createCookieDetails(cookies[0]) : null
+    const best = selectBestCookieMatch(cookies)
+    return best ? createCookieDetails(best) : null
   }
 
   private async getAll(
     event: ExtensionEvent,
     details: chrome.cookies.GetAllDetails,
   ): Promise<chrome.cookies.Cookie[]> {
-    // TODO: storeId
+    if (!isSupportedStore(details.storeId)) return []
+
     const cookies = await this.cookies.get({
       url: details.url,
       name: details.name,
@@ -74,21 +97,30 @@ export class CookiesAPI {
     event: ExtensionEvent,
     details: chrome.cookies.SetDetails,
   ): Promise<chrome.cookies.Cookie | null> {
+    if (!isSupportedStore(details.storeId)) return null
+
     await this.cookies.set(details)
     const cookies = await this.cookies.get(details)
-    return cookies.length > 0 ? createCookieDetails(cookies[0]) : null
+    const best = selectBestCookieMatch(cookies)
+    return best ? createCookieDetails(best) : null
   }
 
   private async remove(
     event: ExtensionEvent,
     details: chrome.cookies.CookieDetails,
   ): Promise<chrome.cookies.CookieDetails | null> {
+    if (!isSupportedStore(details.storeId)) return null
+
     try {
       await this.cookies.remove(details.url, details.name)
     } catch {
       return null
     }
-    return details
+    return {
+      url: details.url,
+      name: details.name,
+      storeId: CookieStoreID.Default,
+    }
   }
 
   private async getAllCookieStores(event: ExtensionEvent): Promise<chrome.cookies.CookieStore[]> {

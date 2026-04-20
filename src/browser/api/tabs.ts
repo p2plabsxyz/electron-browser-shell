@@ -40,6 +40,7 @@ export class TabsAPI {
     handle('tabs.remove', this.remove.bind(this))
     handle('tabs.goForward', this.goForward.bind(this))
     handle('tabs.goBack', this.goBack.bind(this))
+    handle('tabs.captureVisibleTab', this.captureVisibleTab.bind(this), { permission: 'tabs' })
 
     this.ctx.store.on('tab-added', this.observeTab.bind(this))
   }
@@ -172,6 +173,61 @@ export class TabsAPI {
     return tab ? this.getTabDetails(tab) : undefined
   }
 
+  /**
+   * Capture the visible area of the active tab as a data URL.
+   * Uses Electron's webContents.capturePage(); nothing is written to disk.
+   */
+  private async captureVisibleTab(
+    event: ExtensionEvent,
+    windowIdOrOptions?: number | null | { format?: 'png' | 'jpeg'; quality?: number },
+    options?: { format?: 'png' | 'jpeg'; quality?: number },
+  ): Promise<string | undefined> {
+    let windowId: number | null | undefined
+    let opts: { format?: 'png' | 'jpeg'; quality?: number } | undefined
+    if (typeof windowIdOrOptions === 'number' || windowIdOrOptions === null) {
+      windowId = windowIdOrOptions as number | null
+      opts = options
+    } else if (windowIdOrOptions && typeof windowIdOrOptions === 'object' && !Array.isArray(windowIdOrOptions)) {
+      windowId = null
+      opts = windowIdOrOptions
+    } else {
+      windowId = null
+      opts = options
+    }
+
+    const store = this.ctx.store
+    let win: Electron.BaseWindow | null
+
+    if (windowId == null || windowId === TabsAPI.WINDOW_ID_CURRENT) {
+      win = store.getCurrentWindowForExtension(event.extension.id)
+    } else {
+      win = store.getWindowById(windowId)
+    }
+
+    const webContents = win ? store.getActiveTabFromWindow(win) : undefined
+    if (!webContents || webContents.isDestroyed()) {
+      return undefined
+    }
+
+    const image = await webContents.capturePage()
+    if (!image || image.isEmpty()) {
+      return undefined
+    }
+
+    const format = opts?.format ?? 'png'
+    const qualityRaw = opts?.quality ?? 92
+    const quality =
+      typeof qualityRaw === 'number' && Number.isFinite(qualityRaw)
+        ? Math.max(0, Math.min(100, Math.round(qualityRaw)))
+        : 92
+
+    if (format === 'jpeg') {
+      const buf = image.toJPEG(quality)
+      return `data:image/jpeg;base64,${buf.toString('base64')}`
+    }
+    return image.toDataURL()
+  }
+
   private async create(event: ExtensionEvent, details: chrome.tabs.CreateProperties = {}) {
     const url = details.url ? validateExtensionUrl(details.url, event.extension) : undefined
     const tab = await this.ctx.store.createTab({ ...details, url })
@@ -201,41 +257,42 @@ export class TabsAPI {
     const effectiveCurrentWindowId = currentWin?.id ?? this.ctx.store.lastFocusedWindowId
 
     const filteredTabs = Array.from(this.ctx.store.tabs)
-      .map(this.getTabDetails.bind(this))
+      .map(this.getTabDetails.bind(this) as any)
       .filter((tab) => {
-        if (!tab) return false
-        if (isSet(info.active) && info.active !== tab.active) return false
-        if (isSet(info.pinned) && info.pinned !== tab.pinned) return false
-        if (isSet(info.audible) && info.audible !== tab.audible) return false
-        if (isSet(info.muted) && info.muted !== tab.mutedInfo?.muted) return false
-        if (isSet(info.highlighted) && info.highlighted !== tab.highlighted) return false
-        if (isSet(info.discarded) && info.discarded !== tab.discarded) return false
-        if (isSet(info.autoDiscardable) && info.autoDiscardable !== tab.autoDiscardable)
+        const t = tab as any
+        if (!t) return false
+        if (isSet(info.active) && info.active !== t.active) return false
+        if (isSet(info.pinned) && info.pinned !== t.pinned) return false
+        if (isSet(info.audible) && info.audible !== t.audible) return false
+        if (isSet(info.muted) && info.muted !== t.mutedInfo?.muted) return false
+        if (isSet(info.highlighted) && info.highlighted !== t.highlighted) return false
+        if (isSet(info.discarded) && info.discarded !== t.discarded) return false
+        if (isSet(info.autoDiscardable) && info.autoDiscardable !== t.autoDiscardable)
           return false
         if (isSet(info.currentWindow)) {
-          const inCurrentWindow = effectiveCurrentWindowId === tab.windowId
+          const inCurrentWindow = effectiveCurrentWindowId === t.windowId
           if (info.currentWindow !== inCurrentWindow) return false
         }
-        if (isSet(info.frozen) && info.frozen !== tab.frozen) return false
-        if (isSet(info.groupId) && info.groupId !== tab.groupId) return false
-        if (isSet(info.status) && info.status !== tab.status) return false
-        if (isSet(info.title) && typeof info.title === 'string' && typeof tab.title === 'string') {
-          if (!matchesTitlePattern(info.title, tab.title)) return false
+        if (isSet(info.frozen) && info.frozen !== t.frozen) return false
+        if (isSet(info.groupId) && info.groupId !== t.groupId) return false
+        if (isSet(info.status) && info.status !== t.status) return false
+        if (isSet(info.title) && typeof info.title === 'string' && typeof t.title === 'string') {
+          if (!matchesTitlePattern(info.title, t.title)) return false
         }
-        if (isSet(info.url) && typeof tab.url === 'string') {
-          if (typeof info.url === 'string' && !matchesPattern(info.url, tab.url!)) {
+        if (isSet(info.url) && typeof t.url === 'string') {
+          if (typeof info.url === 'string' && !matchesPattern(info.url, t.url!)) {
             return false
           } else if (
             Array.isArray(info.url) &&
-            !info.url.some((pattern) => matchesPattern(pattern, tab.url!))
+            !info.url.some((pattern) => matchesPattern(pattern, t.url!))
           ) {
             return false
           }
         }
         if (isSet(info.windowId)) {
           if (info.windowId === TabsAPI.WINDOW_ID_CURRENT) {
-            if (effectiveCurrentWindowId !== tab.windowId) return false
-          } else if (info.windowId !== tab.windowId) {
+            if (effectiveCurrentWindowId !== t.windowId) return false
+          } else if (info.windowId !== t.windowId) {
             return false
           }
         }
@@ -244,10 +301,11 @@ export class TabsAPI {
         return true
       })
       .map((tab, index) => {
-        if (tab) {
-          tab.index = index
+        const t = tab as any
+        if (t) {
+          t.index = index
         }
-        return tab
+        return t
       })
     return filteredTabs
   }

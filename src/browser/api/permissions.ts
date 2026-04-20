@@ -20,6 +20,7 @@ export class PermissionsAPI {
     handle('permissions.getAll', this.getAll)
     handle('permissions.remove', this.remove)
     handle('permissions.request', this.request)
+    this.ctx.router.setPermissionResolver(this.hasPermission)
 
     const sessionExtensions = ctx.session.extensions || ctx.session
     sessionExtensions.getAllExtensions().forEach((ext) => this.processExtension(ext))
@@ -41,11 +42,20 @@ export class PermissionsAPI {
     })
   }
 
+  private hasPermission = (
+    extensionId: string,
+    permission: chrome.runtime.ManifestPermissions,
+  ): boolean => {
+    const currentPermissions = this.permissionMap.get(extensionId)
+    return !!currentPermissions?.permissions.includes(permission)
+  }
+
   private contains = (
     { extension }: ExtensionEvent,
     permissions: chrome.permissions.Permissions,
   ) => {
-    const currentPermissions = this.permissionMap.get(extension.id)!
+    const currentPermissions = this.permissionMap.get(extension.id)
+    if (!currentPermissions) return false
     const hasPermissions = permissions.permissions
       ? permissions.permissions.every((permission) =>
           currentPermissions.permissions.includes(permission),
@@ -58,12 +68,52 @@ export class PermissionsAPI {
   }
 
   private getAll = ({ extension }: ExtensionEvent) => {
-    return this.permissionMap.get(extension.id)
+    const current = this.permissionMap.get(extension.id)
+    if (!current) {
+      return { permissions: [], origins: [] }
+    }
+    return {
+      permissions: [...current.permissions],
+      origins: [...current.origins],
+    }
   }
 
   private remove = ({ extension }: ExtensionEvent, permissions: chrome.permissions.Permissions) => {
-    // TODO
-    return true
+    const current = this.permissionMap.get(extension.id)
+    if (!current) return false
+
+    const removedPermissions: chrome.runtime.ManifestPermissions[] = []
+    const removedOrigins: string[] = []
+
+    if (Array.isArray(permissions.permissions)) {
+      for (const permission of permissions.permissions) {
+        const index = current.permissions.indexOf(permission)
+        if (index !== -1) {
+          current.permissions.splice(index, 1)
+          removedPermissions.push(permission)
+        }
+      }
+    }
+
+    if (Array.isArray(permissions.origins)) {
+      for (const origin of permissions.origins) {
+        const index = current.origins.indexOf(origin)
+        if (index !== -1) {
+          current.origins.splice(index, 1)
+          removedOrigins.push(origin)
+        }
+      }
+    }
+
+    if (removedPermissions.length > 0 || removedOrigins.length > 0) {
+      this.ctx.router.sendEvent(extension.id, 'permissions.onRemoved', {
+        permissions: removedPermissions,
+        origins: removedOrigins,
+      })
+      return true
+    }
+
+    return false
   }
 
   private request = async (
@@ -74,19 +124,31 @@ export class PermissionsAPI {
       ...(extension.manifest.permissions || []),
       ...(extension.manifest.optional_permissions || []),
     ])
+    const declaredOrigins = new Set([
+      ...(extension.manifest.host_permissions || []),
+      ...((extension.manifest as chrome.runtime.ManifestV3).optional_host_permissions || []),
+    ])
 
     if (request.permissions && !request.permissions.every((p) => declaredPermissions.has(p))) {
       throw new Error('Permissions request includes undeclared permission')
+    }
+    if (request.origins && !request.origins.every((o) => declaredOrigins.has(o))) {
+      throw new Error('Permissions request includes undeclared origin')
     }
 
     const granted = await this.ctx.store.requestPermissions(extension, request)
     if (!granted) return false
 
-    const permissions = this.permissionMap.get(extension.id)!
+    const permissions = this.permissionMap.get(extension.id)
+    if (!permissions) return false
+    const addedPermissions: chrome.runtime.ManifestPermissions[] = []
+    const addedOrigins: string[] = []
+
     if (request.origins) {
       for (const origin of request.origins) {
         if (!permissions.origins.includes(origin)) {
           permissions.origins.push(origin)
+          addedOrigins.push(origin)
         }
       }
     }
@@ -94,8 +156,15 @@ export class PermissionsAPI {
       for (const permission of request.permissions) {
         if (!permissions.permissions.includes(permission)) {
           permissions.permissions.push(permission)
+          addedPermissions.push(permission)
         }
       }
+    }
+    if (addedPermissions.length > 0 || addedOrigins.length > 0) {
+      this.ctx.router.sendEvent(extension.id, 'permissions.onAdded', {
+        permissions: addedPermissions,
+        origins: addedOrigins,
+      })
     }
     return true
   }

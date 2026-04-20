@@ -9,13 +9,11 @@ const transformArgs = (args, sender) => {
 
   const transformArg = (arg) => {
     if (arg && typeof arg === 'object') {
-      // Convert object to function that sends IPC
       if ('__IPC_FN__' in arg) {
         return () => {
           sendIpc({ tabId, name: arg.__IPC_FN__ })
         }
       } else {
-        // Deep transform objects
         for (const key of Object.keys(arg)) {
           if (arg.hasOwnProperty(key)) {
             arg[key] = transformArg(arg[key])
@@ -23,7 +21,6 @@ const transformArgs = (args, sender) => {
         }
       }
     }
-
     return arg
   }
 
@@ -34,10 +31,9 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   switch (message.type) {
     case 'api': {
       const { method, args } = message
-
       const [apiName, subMethod] = method.split('.')
 
-      if (typeof chrome[apiName][subMethod] === 'function') {
+      if (typeof chrome[apiName] !== 'undefined' && typeof chrome[apiName][subMethod] === 'function') {
         const transformedArgs = transformArgs(args, sender)
         chrome[apiName][subMethod](...transformedArgs, reply)
       }
@@ -47,20 +43,22 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 
     case 'event-once': {
       const { name } = message
-
       const [apiName, eventName] = name.split('.')
 
-      if (typeof chrome[apiName][eventName] === 'object') {
+      if (typeof chrome[apiName] !== 'undefined' && typeof chrome[apiName][eventName] === 'object') {
         const event = chrome[apiName][eventName]
         event.addListener(function callback(...args) {
-          reply(args)
+          if (chrome.runtime.lastError) {
+            reply(chrome.runtime.lastError)
+          } else {
+            reply(args)
+          }
           event.removeListener(callback)
         })
       }
     }
   }
 
-  // Respond asynchronously
   return true
 })
 

@@ -34,6 +34,11 @@ process.on('uncaughtException', (err) => {
 
 // Tell ts-node which tsconfig to use
 process.env.TS_NODE_PROJECT = path.resolve(__dirname, '../tsconfig.json')
+// Force CommonJS module resolution in ts-node so bare specifiers (e.g.
+// `import ... from 'events-helpers'` without a .js extension) resolve
+// correctly. Electron 37 treats this process as ESM (module: ESNext in
+// tsconfig), but ts-node's ESM resolver requires explicit extensions.
+process.env.TS_NODE_COMPILER_OPTIONS = JSON.stringify({ module: 'CommonJS' })
 process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = 'true'
 
 const { app, protocol } = require('electron')
@@ -84,7 +89,13 @@ const cleanupTestSessions = async () => {
 
   for (const session of sessions) {
     const sessionPath = path.join(sessionsPath, session)
-    await fs.rm(sessionPath, { recursive: true, force: true })
+    try {
+      await fs.rm(sessionPath, { recursive: true, force: true })
+    } catch (e) {
+      // On Windows, Chromium can keep certain files (e.g. DIPS) temporarily locked.
+      // Best-effort cleanup is fine; tests always use new partitions.
+      console.warn(`Failed to clean session dir "${session}":`, e && e.message ? e.message : e)
+    }
   }
 }
 
@@ -154,7 +165,10 @@ app
 
       const baseElectronDir = path.resolve(__dirname, '..')
       if (argv.files && !argv.files.includes(path.relative(baseElectronDir, file))) {
-        return false
+        const rel = path.relative(baseElectronDir, file)
+        const norm = (p) => String(p).replace(/\\/g, '/')
+        const wanted = argv.files.map(norm)
+        if (!wanted.includes(norm(rel))) return false
       }
 
       return true

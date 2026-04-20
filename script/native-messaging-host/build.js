@@ -7,7 +7,6 @@ const util = require('node:util')
 const cp = require('node:child_process')
 const exec = util.promisify(cp.exec)
 
-const basePath = 'script/native-messaging-host/'
 const outDir = path.join(__dirname, '.')
 const exeName = `crxtesthost${process.platform === 'win32' ? '.exe' : ''}`
 const seaBlobName = 'crxtesthost.blob'
@@ -24,11 +23,12 @@ async function createSEA() {
   }
 
   console.info(`Building ${exeName}…`)
+  const quote = (value) => `"${String(value).replace(/"/g, '\\"')}"`
   const buildCmd = [
     'npx postject',
-    `${basePath}${exeName}`,
+    quote(exeName),
     'NODE_SEA_BLOB',
-    `${basePath}${seaBlobName}`,
+    quote(seaBlobName),
     '--sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2',
     ...(process.platform === 'darwin' ? ['--macho-segment-name NODE_SEA'] : []),
   ]

@@ -53,7 +53,19 @@ async function runElectronTests() {
 
 async function runMainProcessElectronTests() {
   let exe = require('electron')
-  const runnerArgs = ['spec', ...unknownArgs.slice(2)]
+  const argv = process.argv.slice(2)
+  const hasExplicitFiles = argv.includes('--files') || argv.some((a) => String(a).startsWith('--files='))
+  // In some environments, `node ./script/spec-runner.js spec/foo-spec.ts` is intended
+  // to run a single file. Forward it to the Electron runner as `--files`.
+  const positionalFileArgs = hasExplicitFiles
+    ? []
+    : argv.filter((a) => typeof a === 'string' && /[\\\/]spec[\\\/].+-spec\.[tj]s$/.test(a))
+  // `unknownArgs` already contains only user-provided flags/values (not node/electron argv),
+  // so do not slice it.
+  const forwarded = hasExplicitFiles
+    ? unknownArgs
+    : [...unknownArgs, ...(positionalFileArgs.length ? ['--files', ...positionalFileArgs] : [])]
+  const runnerArgs = ['spec', ...forwarded]
 
   // Fix issue in CI
   // "The SUID sandbox helper binary was found, but is not configured correctly."

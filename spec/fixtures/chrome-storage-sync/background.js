@@ -9,13 +9,11 @@ const transformArgs = (args, sender) => {
 
   const transformArg = (arg) => {
     if (arg && typeof arg === 'object') {
-      // Convert object to function that sends IPC
       if ('__IPC_FN__' in arg) {
         return () => {
           sendIpc({ tabId, name: arg.__IPC_FN__ })
         }
       } else {
-        // Deep transform objects
         for (const key of Object.keys(arg)) {
           if (arg.hasOwnProperty(key)) {
             arg[key] = transformArg(arg[key])
@@ -23,7 +21,6 @@ const transformArgs = (args, sender) => {
         }
       }
     }
-
     return arg
   }
 
@@ -34,12 +31,19 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   switch (message.type) {
     case 'api': {
       const { method, args } = message
+      const parts = method.split('.')
+      
+      let target = chrome
+      for (let i = 0; i < parts.length - 1; i++) {
+        target = target[parts[i]]
+      }
+      const fnName = parts[parts.length - 1]
 
-      const [apiName, subMethod] = method.split('.')
-
-      if (typeof chrome[apiName][subMethod] === 'function') {
+      if (target && typeof target[fnName] === 'function') {
         const transformedArgs = transformArgs(args, sender)
-        chrome[apiName][subMethod](...transformedArgs, reply)
+        target[fnName](...transformedArgs, reply)
+      } else {
+        reply({ error: `Function ${method} not found` })
       }
 
       break
@@ -47,15 +51,24 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
 
     case 'event-once': {
       const { name } = message
+      const parts = name.split('.')
+      
+      let target = chrome
+      for (let i = 0; i < parts.length - 1; i++) {
+        target = target[parts[i]]
+      }
+      const eventName = parts[parts.length - 1]
 
-      const [apiName, eventName] = name.split('.')
-
-      if (typeof chrome[apiName][eventName] === 'object') {
-        const event = chrome[apiName][eventName]
+      if (target && target[eventName]) {
+        const event = target[eventName]
         event.addListener(function callback(...args) {
+          // Do not branch on chrome.runtime.lastError here: it can be stale from unrelated API calls
+          // and is not a reliable signal for event listeners (breaks sendMessage payload shape).
           reply(args)
           event.removeListener(callback)
         })
+      } else {
+        reply({ error: `Event ${name} not found` })
       }
     }
   }

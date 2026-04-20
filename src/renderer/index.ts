@@ -31,24 +31,41 @@ export const injectExtensionAPIs = () => {
     }
 
     let result
+    // Callback-style Chrome APIs only set runtime.lastError when something failed;
+    // on success the property is absent / undefined (not null).
+    let lastError: { message: string } | undefined
 
     try {
       result = await ipcRenderer.invoke('crx-msg', extensionId, fnName, ...args)
     } catch (e) {
-      // TODO: Set chrome.runtime.lastError?
       console.error(e)
       result = undefined
+      lastError = {
+        message: e instanceof Error ? e.message : String(e),
+      }
     }
 
     if (process.env.NODE_ENV === 'development') {
       console.log(fnName, '(result)', result)
     }
 
+    const chromeAny = (globalThis as any).chrome
+    const rt = chromeAny?.runtime
     if (callback) {
-      callback(result)
-    } else {
-      return result
+      try {
+        if (rt) {
+          if (lastError) rt.lastError = lastError
+          else delete rt.lastError
+        }
+        callback(result)
+      } finally {
+        if (rt) delete rt.lastError
+      }
+      return
     }
+
+    if (rt) delete rt.lastError
+    return result
   }
 
   type ConnectNativeCallback = (connectionId: string, send: (message: any) => void) => void
@@ -95,8 +112,30 @@ export const injectExtensionAPIs = () => {
     // Use context bridge API or closure variable when context isolation is disabled.
     const electron = ((globalThis as any).electron as typeof electronContext) || electronContext
 
-    const chrome = globalThis.chrome || {}
+    const chrome: any = (globalThis as any).chrome || {}
     const extensionId = chrome.runtime?.id
+
+    // `no-cache` still revalidates; 304 has no body and Electron MV3 SW can surface
+    // an empty body. Treat as no-store so responses include full entity bytes.
+    try {
+      const g = globalThis as any
+      const nativeFetch = g.fetch?.bind(g)
+      if (typeof nativeFetch === 'function' && g.fetch !== undefined) {
+        g.fetch = function (input: any, init?: RequestInit) {
+          if (init && init.cache === 'no-cache') {
+            return nativeFetch(input, { ...init, cache: 'no-store' })
+          }
+          if (typeof Request !== 'undefined' && input instanceof Request) {
+            if (input.cache === 'no-cache' && (init === undefined || init.cache === undefined)) {
+              return nativeFetch(new Request(input, { cache: 'no-store' }), init)
+            }
+          }
+          return nativeFetch(input, init)
+        }
+      }
+    } catch {
+      /* ignore */
+    }
 
     // NOTE: This uses a synchronous IPC to get the extension manifest.
     // To avoid this, JS bindings for RendererExtensionRegistry would be
@@ -107,8 +146,8 @@ export const injectExtensionAPIs = () => {
 
     const invokeExtension =
       (fnName: string, opts: ExtensionMessageOptions = {}) =>
-      (...args: any[]) =>
-        electron.invokeExtension(extensionId, fnName, opts, ...args)
+        (...args: any[]) =>
+          electron.invokeExtension(extensionId, fnName, opts, ...args)
 
     function imageData2base64(imageData: ImageData) {
       const canvas = document.createElement('canvas')
@@ -123,12 +162,17 @@ export const injectExtensionAPIs = () => {
     }
 
     class ExtensionEvent<T extends Function> implements chrome.events.Event<T> {
+      private listeners = new Set<T>()
+
       constructor(private name: string) {}
 
       addListener(callback: T) {
+        if (this.listeners.has(callback)) return
+        this.listeners.add(callback)
         electron.addExtensionListener(extensionId, this.name, callback)
       }
       removeListener(callback: T) {
+        if (!this.listeners.delete(callback)) return
         electron.removeExtensionListener(extensionId, this.name, callback)
       }
 
@@ -138,7 +182,7 @@ export const injectExtensionAPIs = () => {
         throw new Error('Method not implemented.')
       }
       hasListener(callback: T): boolean {
-        throw new Error('Method not implemented.')
+        return this.listeners.has(callback)
       }
       removeRules(ruleIdentifiers?: string[] | undefined, callback?: (() => void) | undefined): void
       removeRules(callback?: (() => void) | undefined): void
@@ -152,17 +196,39 @@ export const injectExtensionAPIs = () => {
         throw new Error('Method not implemented.')
       }
       hasListeners(): boolean {
-        throw new Error('Method not implemented.')
+        return this.listeners.size > 0
       }
     }
 
     // chrome.types.ChromeSetting<any>
     class ChromeSetting {
-      set() {}
-      get() {}
-      clear() {}
+      private value: any = undefined
+
+      get(_details?: any, cb?: Function) {
+        const result = {
+          value: this.value,
+          levelOfControl: 'controllable_by_this_extension' as const,
+        }
+        if (typeof cb === 'function') cb(result)
+        return result
+      }
+
+      set(details?: any, cb?: Function) {
+        if (details && typeof details === 'object' && 'value' in details) {
+          this.value = details.value
+        }
+        if (typeof cb === 'function') cb()
+      }
+
+      clear(_details?: any, cb?: Function) {
+        this.value = undefined
+        if (typeof cb === 'function') cb()
+      }
+
       onChange = {
         addListener: () => {},
+        removeListener: () => {},
+        hasListener: () => false,
       }
     }
 
@@ -301,7 +367,7 @@ export const injectExtensionAPIs = () => {
     /**
      * Factories for each additional chrome.* API.
      */
-    const apiDefinitions: Partial<APIFactoryMap> = {
+    const apiDefinitions: any = {
       action: {
         shouldInject: () => manifest.manifest_version === 3 && !!manifest.action,
         factory: browserActionFactory,
@@ -318,6 +384,21 @@ export const injectExtensionAPIs = () => {
             ...base,
             getAll: invokeExtension('commands.getAll'),
             onCommand: new ExtensionEvent('commands.onCommand'),
+          }
+        },
+      },
+
+      debugger: {
+        shouldInject: () => !!(manifest.permissions as string[] | undefined)?.includes('debugger'),
+        factory: (base) => {
+          return {
+            ...base,
+            attach: invokeExtension('debugger.attach'),
+            detach: invokeExtension('debugger.detach'),
+            getTargets: invokeExtension('debugger.getTargets'),
+            sendCommand: invokeExtension('debugger.sendCommand'),
+            onDetach: new ExtensionEvent('debugger.onDetach'),
+            onEvent: new ExtensionEvent('debugger.onEvent'),
           }
         },
       },
@@ -356,7 +437,7 @@ export const injectExtensionAPIs = () => {
               menuCreate(createProperties, callback)
               return createProperties.id
             },
-            update: invokeExtension('contextMenus.update', { noop: true }),
+            update: invokeExtension('contextMenus.update'),
             remove: invokeExtension('contextMenus.remove'),
             removeAll: invokeExtension('contextMenus.removeAll'),
             onClicked: new ExtensionEvent<
@@ -378,6 +459,22 @@ export const injectExtensionAPIs = () => {
             remove: invokeExtension('cookies.remove'),
             getAllCookieStores: invokeExtension('cookies.getAllCookieStores'),
             onChanged: new ExtensionEvent('cookies.onChanged'),
+          }
+        },
+      },
+
+      declarativeNetRequest: {
+        factory: (base) => {
+          return {
+            ...base,
+            getDynamicRules: invokeExtension('declarativeNetRequest.getDynamicRules'),
+            updateDynamicRules: invokeExtension('declarativeNetRequest.updateDynamicRules'),
+            getSessionRules: invokeExtension('declarativeNetRequest.getSessionRules'),
+            updateSessionRules: invokeExtension('declarativeNetRequest.updateSessionRules'),
+            getEnabledRulesets: invokeExtension('declarativeNetRequest.getEnabledRulesets'),
+            updateEnabledRulesets: invokeExtension('declarativeNetRequest.updateEnabledRulesets'),
+            isRegexSupported: invokeExtension('declarativeNetRequest.isRegexSupported'),
+            getMatchedRules: invokeExtension('declarativeNetRequest.getMatchedRules'),
           }
         },
       },
@@ -424,6 +521,33 @@ export const injectExtensionAPIs = () => {
             getViews: () => [],
           }
         },
+      },
+
+      identity: {
+        shouldInject: () => !!(manifest.permissions as string[] | undefined)?.includes('identity'),
+        factory: (base) => {
+          const redirectDomain = 'chromiumapp.org'
+          const redirectBase = extensionId
+            ? `https://${extensionId}.${redirectDomain}/`
+            : ''
+          return {
+            ...base,
+            getRedirectURL: (path?: string) =>
+              path ? redirectBase + path.replace(/^\//, '') : redirectBase,
+            launchWebAuthFlow: invokeExtension('identity.launchWebAuthFlow'),
+            getAuthToken: invokeExtension('identity.getAuthToken'),
+          }
+        },
+      },
+
+      management: {
+        shouldInject: () => !!(manifest.permissions as string[] | undefined)?.includes('management'),
+        factory: (base) => ({
+          ...base,
+          getSelf: invokeExtension('management.getSelf'),
+          getAll: invokeExtension('management.getAll'),
+          get: invokeExtension('management.get'),
+        }),
       },
 
       i18n: {
@@ -500,34 +624,142 @@ export const injectExtensionAPIs = () => {
         },
       },
 
-      runtime: {
+      proxy: {
+        shouldInject: () => !!(manifest.permissions as string[] | undefined)?.includes('proxy'),
         factory: (base) => {
           return {
             ...base,
-            connectNative: (application: string) => {
-              const port = new NativePort()
-              const receive = port._receive.bind(port)
-              const disconnect = port._disconnect.bind(port)
-              const callback: ConnectNativeCallback = (connectionId, send) => {
-                port._init(connectionId, send)
-              }
-              electron.connectNative(extensionId, application, receive, disconnect, callback)
-              return port
+            settings: {
+              get: invokeExtension('proxy.settings.get'),
+              set: invokeExtension('proxy.settings.set'),
+              clear: invokeExtension('proxy.settings.clear'),
+              onChange: new ExtensionEvent('proxy.settings.onChange'),
             },
-            openOptionsPage: invokeExtension('runtime.openOptionsPage'),
-            sendNativeMessage: invokeExtension('runtime.sendNativeMessage'),
+            onProxyError: new ExtensionEvent('proxy.onProxyError'),
           }
+        },
+      },
+
+      scripting: {
+        shouldInject: () => manifest.manifest_version === 3,
+        factory: (base) => {
+          const ipcExecuteScript = invokeExtension('scripting.executeScript')
+          return {
+            ...base,
+            insertCSS: invokeExtension('scripting.insertCSS'),
+            executeScript: (injection: any) => {
+              if (injection && typeof injection.func === 'function') {
+                injection = { ...injection, func: String(injection.func) }
+              }
+              return ipcExecuteScript(injection)
+            },
+          }
+        },
+      },
+
+      runtime: {
+        factory: (base) => {
+          const patched: any = {}
+          // Copy ALL own properties from the native chrome.runtime object,
+          // including non-enumerable ones (connect, sendMessage, onConnect,
+          // onMessage, etc.) that the spread operator would silently drop.
+          if (base) {
+            for (const key of Object.getOwnPropertyNames(base)) {
+              try {
+                patched[key] = (base as any)[key]
+              } catch (_) { /* skip inaccessible */ }
+            }
+          }
+          patched.connectNative = (application: string) => {
+            const port = new NativePort()
+            const receive = port._receive.bind(port)
+            const disconnect = port._disconnect.bind(port)
+            const callback: ConnectNativeCallback = (connectionId, send) => {
+              port._init(connectionId, send)
+            }
+            electron.connectNative(extensionId, application, receive, disconnect, callback)
+            return port
+          }
+          patched.openOptionsPage = invokeExtension('runtime.openOptionsPage')
+          patched.sendNativeMessage = invokeExtension('runtime.sendNativeMessage')
+          return patched
         },
       },
 
       storage: {
         factory: (base) => {
-          const local = base && base.local
+          const customOnChanged = new ExtensionEvent('storage.onChanged')
+          const originalAddListener = base?.onChanged?.addListener?.bind(base.onChanged)
+          const originalRemoveListener = base?.onChanged?.removeListener?.bind(base.onChanged)
+
+          const addListener = (cb: any) => {
+            if (originalAddListener) {
+              try {
+                originalAddListener(cb)
+              } catch {
+                // Some Electron contexts expose a partial native storage event that can throw.
+                // We still want our IPC-backed listener to be registered.
+              }
+            }
+            customOnChanged.addListener(cb)
+          }
+          const removeListener = (cb: any) => {
+            if (originalRemoveListener) {
+              try {
+                originalRemoveListener(cb)
+              } catch {
+                // Ignore and continue removing from the IPC-backed listener set.
+              }
+            }
+            customOnChanged.removeListener(cb)
+          }
+          const hasListener = (cb: any) => {
+            return customOnChanged.hasListener(cb) || (base?.onChanged?.hasListener?.(cb) ?? false)
+          }
+          const hasListeners = () =>
+            customOnChanged.hasListeners() || (base?.onChanged?.hasListeners?.() ?? false)
+
+          const onChanged = { addListener, removeListener, hasListener, hasListeners }
+
+          const cbWrap = (fn: (...a: any[]) => Promise<any>) =>
+            (...args: any[]) => {
+              const last = args[args.length - 1]
+              if (typeof last === 'function') {
+                const cb = args.pop()
+                fn(...args).then(cb).catch(() => cb(undefined))
+                return
+              }
+              return fn(...args)
+            }
+
+          // Per-area onChanged is required by real extensions (e.g. Dark Reader uses
+          // chrome.storage.local.onChanged). It aliases the same listeners as
+          // chrome.storage.onChanged; the event payload includes the storage area.
+          const ipcLocal = {
+            get: cbWrap(invokeExtension('storage.local.get')),
+            set: cbWrap(invokeExtension('storage.local.set')),
+            remove: cbWrap(invokeExtension('storage.local.remove')),
+            clear: cbWrap(invokeExtension('storage.local.clear')),
+            getBytesInUse: cbWrap(invokeExtension('storage.local.getBytesInUse')),
+            onChanged,
+            QUOTA_BYTES: 10485760,
+          }
+
           return {
             ...base,
-            // TODO: provide a backend for browsers to opt-in to
-            managed: local,
-            sync: local,
+            onChanged,
+            local: ipcLocal,
+            managed: ipcLocal,
+            session: (base as any)?.session || ipcLocal,
+            sync: {
+              ...(base as any)?.sync ?? ipcLocal,
+              onChanged,
+              get: cbWrap(invokeExtension('storage.sync.get')),
+              set: cbWrap(invokeExtension('storage.sync.set')),
+              remove: cbWrap(invokeExtension('storage.sync.remove')),
+              clear: cbWrap(invokeExtension('storage.sync.clear')),
+              getBytesInUse: cbWrap(invokeExtension('storage.sync.getBytesInUse')),
+            },
           }
         },
       },
@@ -563,6 +795,7 @@ export const injectExtensionAPIs = () => {
             get: invokeExtension('tabs.get'),
             getCurrent: invokeExtension('tabs.getCurrent'),
             getAllInWindow: invokeExtension('tabs.getAllInWindow'),
+            captureVisibleTab: invokeExtension('tabs.captureVisibleTab'),
             insertCSS: invokeExtension('tabs.insertCSS'),
             query: invokeExtension('tabs.query'),
             reload: invokeExtension('tabs.reload'),
@@ -613,9 +846,490 @@ export const injectExtensionAPIs = () => {
 
       webRequest: {
         factory: (base) => {
+          const onBeforeRequestEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebRequestBodyDetails) =>
+              | void
+              | { cancel?: boolean; redirectUrl?: string }
+          >('webRequest.onBeforeRequest')
+          const onBeforeRequestWrapperMap = new Map<
+            (
+              details: chrome.webRequest.WebRequestBodyDetails,
+            ) => void | { cancel?: boolean; redirectUrl?: string },
+            (details: chrome.webRequest.WebRequestBodyDetails) => void
+          >()
+
+          const onBeforeSendHeadersEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebRequestHeadersDetails) => void | { requestHeaders?: any }
+          >('webRequest.onBeforeSendHeaders')
+          const onBeforeSendHeadersWrapperMap = new Map<
+            (details: chrome.webRequest.WebRequestHeadersDetails) => void | { requestHeaders?: any },
+            (details: chrome.webRequest.WebRequestHeadersDetails) => void
+          >()
+
+          const onHeadersReceivedEvent = new ExtensionEvent<
+            (
+              details: chrome.webRequest.WebResponseHeadersDetails,
+            ) => void | { responseHeaders?: any }
+          >('webRequest.onHeadersReceived')
+          const onHeadersReceivedWrapperMap = new Map<
+            (details: chrome.webRequest.WebResponseHeadersDetails) => void | { responseHeaders?: any },
+            (details: chrome.webRequest.WebResponseHeadersDetails) => void
+          >()
+
+          const onSendHeadersEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebRequestHeadersDetails) => void
+          >('webRequest.onSendHeaders')
+
+          const onResponseStartedEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebResponseCacheDetails) => void
+          >('webRequest.onResponseStarted')
+
+          const onCompletedEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebResponseCacheDetails) => void
+          >('webRequest.onCompleted')
+
+          const onErrorOccurredEvent = new ExtensionEvent<
+            (details: chrome.webRequest.WebResponseErrorDetails) => void
+          >('webRequest.onErrorOccurred')
+
+          const onAuthRequiredEvent = new ExtensionEvent<
+            (
+              details: chrome.webRequest.WebAuthenticationChallengeDetails,
+              asyncCallback?: (response?: chrome.webRequest.BlockingResponse) => void,
+            ) => void | chrome.webRequest.BlockingResponse
+          >('webRequest.onAuthRequired')
+          const onAuthRequiredWrapperMap = new Map<
+            (
+              details: chrome.webRequest.WebAuthenticationChallengeDetails,
+              asyncCallback?: (response?: chrome.webRequest.BlockingResponse) => void,
+            ) => void | chrome.webRequest.BlockingResponse,
+            (details: chrome.webRequest.WebAuthenticationChallengeDetails) => void
+          >()
+
           return {
             ...base,
-            onHeadersReceived: new ExtensionEvent('webRequest.onHeadersReceived'),
+            onBeforeRequest: {
+              addListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestBodyDetails,
+                ) => void | { cancel?: boolean; redirectUrl?: string },
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                const existing = onBeforeRequestWrapperMap.get(callback)
+                if (existing) return
+
+                invokeExtension('webRequest.addOnBeforeRequestListener')(filter, extraInfoSpec)
+
+                const wrapper = (details: chrome.webRequest.WebRequestBodyDetails) => {
+                  const reqId = details && (details as any).requestId
+                  const listenerId = details && (details as any).listenerId
+                  Promise.resolve()
+                    .then(() => callback(details))
+                    .then((result) => {
+                      if (reqId != null && listenerId != null) {
+                        invokeExtension('webRequest.onBeforeRequest.response')(
+                          reqId,
+                          listenerId,
+                          result || undefined,
+                        ).catch(() => {})
+                      }
+                    })
+                    .catch(() => {
+                      if (reqId != null && listenerId != null) {
+                        invokeExtension('webRequest.onBeforeRequest.response')(
+                          reqId,
+                          listenerId,
+                          undefined,
+                        ).catch(() => {})
+                      }
+                    })
+                }
+
+                onBeforeRequestWrapperMap.set(callback, wrapper)
+                onBeforeRequestEvent.addListener(wrapper)
+              },
+              removeListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestBodyDetails,
+                ) => void | { cancel?: boolean; redirectUrl?: string },
+              ) {
+                const wrapper = onBeforeRequestWrapperMap.get(callback)
+                if (wrapper) {
+                  onBeforeRequestEvent.removeListener(wrapper)
+                  onBeforeRequestWrapperMap.delete(callback)
+                  if (!onBeforeRequestEvent.hasListeners()) {
+                    invokeExtension('webRequest.removeOnBeforeRequestListener')().catch(() => {})
+                  }
+                } else {
+                  onBeforeRequestEvent.removeListener(callback as any)
+                }
+              },
+              hasListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestBodyDetails,
+                ) => void | { cancel?: boolean; redirectUrl?: string },
+              ) {
+                return onBeforeRequestEvent.hasListener(
+                  onBeforeRequestWrapperMap.get(callback) || (callback as any),
+                )
+              },
+              hasListeners() {
+                return onBeforeRequestEvent.hasListeners()
+              },
+            },
+            onBeforeSendHeaders: {
+              addListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestHeadersDetails,
+                ) => void | { requestHeaders?: any },
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                const existing = onBeforeSendHeadersWrapperMap.get(callback)
+                if (existing) return
+
+                invokeExtension('webRequest.addOnBeforeSendHeadersListener')(filter, extraInfoSpec)
+
+                const wrapper = (details: chrome.webRequest.WebRequestHeadersDetails) => {
+                  const reqId = details && (details as any).requestId
+                  const listenerId = details && (details as any).listenerId
+                  Promise.resolve()
+                    .then(() => callback(details))
+                    .then((result) => {
+                      if (reqId != null && listenerId != null) {
+                        invokeExtension('webRequest.onBeforeSendHeaders.response')(
+                          reqId,
+                          listenerId,
+                          result || undefined,
+                        ).catch(() => {})
+                      }
+                    })
+                    .catch(() => {
+                      if (reqId != null && listenerId != null) {
+                        invokeExtension('webRequest.onBeforeSendHeaders.response')(
+                          reqId,
+                          listenerId,
+                          undefined,
+                        ).catch(() => {})
+                      }
+                    })
+                }
+
+                onBeforeSendHeadersWrapperMap.set(callback, wrapper)
+                onBeforeSendHeadersEvent.addListener(wrapper)
+              },
+              removeListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestHeadersDetails,
+                ) => void | { requestHeaders?: any },
+              ) {
+                const wrapper = onBeforeSendHeadersWrapperMap.get(callback)
+                if (wrapper) {
+                  onBeforeSendHeadersEvent.removeListener(wrapper)
+                  onBeforeSendHeadersWrapperMap.delete(callback)
+                  if (!onBeforeSendHeadersEvent.hasListeners()) {
+                    invokeExtension('webRequest.removeOnBeforeSendHeadersListener')().catch(() => {})
+                  }
+                } else {
+                  onBeforeSendHeadersEvent.removeListener(callback as any)
+                }
+              },
+              hasListener(
+                callback: (
+                  details: chrome.webRequest.WebRequestHeadersDetails,
+                ) => void | { requestHeaders?: any },
+              ) {
+                return onBeforeSendHeadersEvent.hasListener(
+                  onBeforeSendHeadersWrapperMap.get(callback) || (callback as any),
+                )
+              },
+              hasListeners() {
+                return onBeforeSendHeadersEvent.hasListeners()
+              },
+            },
+            onSendHeaders: {
+              addListener(
+                callback: (details: chrome.webRequest.WebRequestHeadersDetails) => void,
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                invokeExtension('webRequest.addOnSendHeadersListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                onSendHeadersEvent.addListener(callback)
+              },
+              removeListener(
+                callback: (details: chrome.webRequest.WebRequestHeadersDetails) => void,
+              ) {
+                onSendHeadersEvent.removeListener(callback)
+                if (!onSendHeadersEvent.hasListeners()) {
+                  invokeExtension('webRequest.removeOnSendHeadersListener')().catch(() => {})
+                }
+              },
+              hasListener(
+                callback: (details: chrome.webRequest.WebRequestHeadersDetails) => void,
+              ) {
+                return onSendHeadersEvent.hasListener(callback)
+              },
+              hasListeners() {
+                return onSendHeadersEvent.hasListeners()
+              },
+            },
+            onHeadersReceived: {
+              addListener(
+                callback: (
+                  details: chrome.webRequest.WebResponseHeadersDetails,
+                ) => void | { responseHeaders?: any },
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                const existing = onHeadersReceivedWrapperMap.get(callback)
+                if (existing) return
+
+                invokeExtension('webRequest.addOnHeadersReceivedListener')(filter, extraInfoSpec)
+
+                const wrapper = (details: chrome.webRequest.WebResponseHeadersDetails) => {
+                  const reqId = details && (details as any).requestId
+                  const listenerId = details && (details as any).listenerId
+                  Promise.resolve()
+                    .then(() => callback(details))
+                    .then((result) => {
+                      if (reqId != null && listenerId != null) {
+                        invokeExtension('webRequest.onHeadersReceived.response')(
+                          reqId,
+                          listenerId,
+                          result || undefined,
+                        ).catch(() => {})
+                      }
+                    })
+                    .catch(() => {
+                      if (reqId != null && listenerId != null) {
+                        invokeExtension('webRequest.onHeadersReceived.response')(
+                          reqId,
+                          listenerId,
+                          undefined,
+                        ).catch(() => {})
+                      }
+                    })
+                }
+
+                onHeadersReceivedWrapperMap.set(callback, wrapper)
+                onHeadersReceivedEvent.addListener(wrapper)
+              },
+              removeListener(
+                callback: (
+                  details: chrome.webRequest.WebResponseHeadersDetails,
+                ) => void | { responseHeaders?: any },
+              ) {
+                const wrapper = onHeadersReceivedWrapperMap.get(callback)
+                if (wrapper) {
+                  onHeadersReceivedEvent.removeListener(wrapper)
+                  onHeadersReceivedWrapperMap.delete(callback)
+                  if (!onHeadersReceivedEvent.hasListeners()) {
+                    invokeExtension('webRequest.removeOnHeadersReceivedListener')().catch(() => {})
+                  }
+                } else {
+                  onHeadersReceivedEvent.removeListener(callback as any)
+                }
+              },
+              hasListener(
+                callback: (
+                  details: chrome.webRequest.WebResponseHeadersDetails,
+                ) => void | { responseHeaders?: any },
+              ) {
+                return onHeadersReceivedEvent.hasListener(
+                  onHeadersReceivedWrapperMap.get(callback) || (callback as any),
+                )
+              },
+              hasListeners() {
+                return onHeadersReceivedEvent.hasListeners()
+              },
+            },
+            onResponseStarted: {
+              addListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                invokeExtension('webRequest.addOnResponseStartedListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                onResponseStartedEvent.addListener(callback)
+              },
+              removeListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+              ) {
+                onResponseStartedEvent.removeListener(callback)
+                if (!onResponseStartedEvent.hasListeners()) {
+                  invokeExtension('webRequest.removeOnResponseStartedListener')().catch(() => {})
+                }
+              },
+              hasListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+              ) {
+                return onResponseStartedEvent.hasListener(callback)
+              },
+              hasListeners() {
+                return onResponseStartedEvent.hasListeners()
+              },
+            },
+            onCompleted: {
+              addListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                invokeExtension('webRequest.addOnCompletedListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                onCompletedEvent.addListener(callback)
+              },
+              removeListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+              ) {
+                onCompletedEvent.removeListener(callback)
+                if (!onCompletedEvent.hasListeners()) {
+                  invokeExtension('webRequest.removeOnCompletedListener')().catch(() => {})
+                }
+              },
+              hasListener(
+                callback: (details: chrome.webRequest.WebResponseCacheDetails) => void,
+              ) {
+                return onCompletedEvent.hasListener(callback)
+              },
+              hasListeners() {
+                return onCompletedEvent.hasListeners()
+              },
+            },
+            onErrorOccurred: {
+              addListener(
+                callback: (details: chrome.webRequest.WebResponseErrorDetails) => void,
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                invokeExtension('webRequest.addOnErrorOccurredListener')(
+                  filter,
+                  extraInfoSpec,
+                )
+                onErrorOccurredEvent.addListener(callback)
+              },
+              removeListener(
+                callback: (details: chrome.webRequest.WebResponseErrorDetails) => void,
+              ) {
+                onErrorOccurredEvent.removeListener(callback)
+                if (!onErrorOccurredEvent.hasListeners()) {
+                  invokeExtension('webRequest.removeOnErrorOccurredListener')().catch(() => {})
+                }
+              },
+              hasListener(
+                callback: (details: chrome.webRequest.WebResponseErrorDetails) => void,
+              ) {
+                return onErrorOccurredEvent.hasListener(callback)
+              },
+              hasListeners() {
+                return onErrorOccurredEvent.hasListeners()
+              },
+            },
+            onAuthRequired: {
+              addListener(
+                callback: (
+                  details: chrome.webRequest.WebAuthenticationChallengeDetails,
+                  asyncCallback?: (response?: chrome.webRequest.BlockingResponse) => void,
+                ) => void | chrome.webRequest.BlockingResponse,
+                filter: chrome.webRequest.RequestFilter,
+                extraInfoSpec?: string[],
+              ) {
+                const existing = onAuthRequiredWrapperMap.get(callback)
+                if (existing) return
+
+                invokeExtension('webRequest.addOnAuthRequiredListener')(filter, extraInfoSpec)
+
+                const wrapper = (details: chrome.webRequest.WebAuthenticationChallengeDetails) => {
+                  const reqId = details && (details as any).requestId
+                  const listenerId = details && (details as any).listenerId
+                  const send = (result?: chrome.webRequest.BlockingResponse | void) => {
+                    if (reqId != null && listenerId != null) {
+                      invokeExtension('webRequest.onAuthRequired.response')(
+                        reqId,
+                        listenerId,
+                        result || undefined,
+                      ).catch(() => {})
+                    }
+                  }
+
+                  const usesAsyncBlocking =
+                    Array.isArray(extraInfoSpec) && extraInfoSpec.includes('asyncBlocking')
+
+                  if (usesAsyncBlocking) {
+                    let responded = false
+                    const asyncCallback = (result?: chrome.webRequest.BlockingResponse) => {
+                      if (responded) return
+                      responded = true
+                      send(result)
+                    }
+
+                    Promise.resolve()
+                      .then(() => callback(details, asyncCallback))
+                      .then((result) => {
+                        if (!responded && result !== undefined) {
+                          responded = true
+                          send(result)
+                        }
+                      })
+                      .catch(() => {
+                        if (!responded) {
+                          responded = true
+                          send(undefined)
+                        }
+                      })
+
+                    return
+                  }
+
+                  Promise.resolve()
+                    .then(() => callback(details))
+                    .then((result) => send(result))
+                    .catch(() => send(undefined))
+                }
+
+                onAuthRequiredWrapperMap.set(callback, wrapper)
+                onAuthRequiredEvent.addListener(wrapper)
+              },
+              removeListener(
+                callback: (
+                  details: chrome.webRequest.WebAuthenticationChallengeDetails,
+                  asyncCallback?: (response?: chrome.webRequest.BlockingResponse) => void,
+                ) => void | chrome.webRequest.BlockingResponse,
+              ) {
+                const wrapper = onAuthRequiredWrapperMap.get(callback)
+                if (wrapper) {
+                  onAuthRequiredEvent.removeListener(wrapper)
+                  onAuthRequiredWrapperMap.delete(callback)
+                  if (!onAuthRequiredEvent.hasListeners()) {
+                    invokeExtension('webRequest.removeOnAuthRequiredListener')().catch(() => {})
+                  }
+                } else {
+                  onAuthRequiredEvent.removeListener(callback as any)
+                }
+              },
+              hasListener(
+                callback: (
+                  details: chrome.webRequest.WebAuthenticationChallengeDetails,
+                  asyncCallback?: (response?: chrome.webRequest.BlockingResponse) => void,
+                ) => void | chrome.webRequest.BlockingResponse,
+              ) {
+                return onAuthRequiredEvent.hasListener(
+                  onAuthRequiredWrapperMap.get(callback) || (callback as any),
+                )
+              },
+              hasListeners() {
+                return onAuthRequiredEvent.hasListeners()
+              },
+            },
           }
         },
       },
@@ -643,10 +1357,10 @@ export const injectExtensionAPIs = () => {
     }
 
     // Initialize APIs
-    Object.keys(apiDefinitions).forEach((key: any) => {
-      const apiName: keyof typeof chrome = key
+    Object.keys(apiDefinitions).forEach((apiName) => {
       const baseApi = chrome[apiName] as any
-      const api = apiDefinitions[apiName]!
+      const api = (apiDefinitions as any)[apiName] as any
+      if (!api) return
 
       // Allow APIs to opt-out of being available in this context.
       if (api.shouldInject && !api.shouldInject()) return

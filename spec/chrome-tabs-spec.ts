@@ -16,6 +16,10 @@ describe('chrome.tabs', () => {
       assignTabDetails?.(details, tab)
     },
   })
+  const captureBrowser = useExtensionBrowser({
+    url: server.getUrl,
+    extensionName: 'chrome-tabs-capture',
+  })
 
   afterEach(() => {
     assignTabDetails = undefined
@@ -246,6 +250,35 @@ describe('chrome.tabs', () => {
     it('injects code into the active tab', async () => {
       const [result] = await browser.crx.exec('tabs.executeScript', { code: 'location.href' })
       expect(result).to.equal(browser.window.webContents.getURL())
+    })
+  })
+
+  describe('captureVisibleTab()', () => {
+    it('returns a PNG data URL by default', async () => {
+      const result = await captureBrowser.crx.exec('tabs.captureVisibleTab')
+      expect(result).to.be.a('string')
+      expect(result.startsWith('data:image/png;base64,')).to.equal(true)
+    })
+
+    it('returns a JPEG data URL and clamps quality', async () => {
+      const highQuality = await captureBrowser.crx.exec('tabs.captureVisibleTab', {
+        format: 'jpeg',
+        quality: 999,
+      })
+      const lowQuality = await captureBrowser.crx.exec('tabs.captureVisibleTab', {
+        format: 'jpeg',
+        quality: -10,
+      })
+      expect(highQuality).to.be.a('string')
+      expect(lowQuality).to.be.a('string')
+      expect(highQuality.startsWith('data:image/jpeg;base64,')).to.equal(true)
+      expect(lowQuality.startsWith('data:image/jpeg;base64,')).to.equal(true)
+    })
+
+    it('returns undefined when there is no active tracked tab', async () => {
+      captureBrowser.extensions.removeTab(captureBrowser.window.webContents)
+      const result = await captureBrowser.crx.exec('tabs.captureVisibleTab')
+      expect(result == null).to.equal(true)
     })
   })
 

@@ -104,8 +104,14 @@ class RoutingDelegate {
     d(`received '${handlerName}'`, args)
 
     const observer = this.sessionMap.get(getSessionFromEvent(event))
+    if (!observer) return undefined
 
-    return observer?.onExtensionMessage(event, extensionId, handlerName, ...args)
+    try {
+      return await observer.onExtensionMessage(event, extensionId, handlerName, ...args)
+    } catch (err) {
+      d('handler failed for %s (extension context may be torn down): %o', handlerName, err)
+      return undefined
+    }
   }
 
   private onRemoteMessage = async (
@@ -218,6 +224,10 @@ const eventListenerEquals = (a: EventListener) => (b: EventListener) => {
 export class ExtensionRouter {
   private handlers: HandlerMap = new Map()
   private listeners: Map<EventName, EventListener[]> = new Map()
+  private permissionResolver?: (
+    extensionId: string,
+    permission: chrome.runtime.ManifestPermissions,
+  ) => boolean
 
   /**
    * Collection of all extension hosts in the session.
@@ -352,6 +362,12 @@ export class ExtensionRouter {
     return handler
   }
 
+  setPermissionResolver(
+    resolver: (extensionId: string, permission: chrome.runtime.ManifestPermissions) => boolean,
+  ) {
+    this.permissionResolver = resolver
+  }
+
   async onExtensionMessage(
     event: IpcInvokeEvent,
     extensionId: string | undefined,
@@ -374,17 +390,23 @@ export class ExtensionRouter {
 
     if (handler.permission) {
       const manifest: chrome.runtime.Manifest = extension?.manifest
-      if (!extension || !manifest.permissions?.includes(handler.permission)) {
+      const hasManifestPermission = !!manifest.permissions?.includes(handler.permission)
+      const hasGrantedPermission =
+        !!extension &&
+        !!this.permissionResolver?.(extension.id, handler.permission as chrome.runtime.ManifestPermissions)
+      if (!extension || (!hasManifestPermission && !hasGrantedPermission)) {
         throw new Error(
           `${handlerName} requires an extension with ${handler.permission} permissions`,
         )
       }
     }
 
+    // Some handlers allow calls without a loaded extension context.
+    const extensionForEvent = extension ?? (extensionId ? { id: extensionId, manifest: {} } as ExtendedExtension : undefined)
     const extEvent: ExtensionEvent =
       event.type === 'frame'
-        ? { type: event.type, sender: event.sender, extension: extension! }
-        : { type: event.type, sender: event.serviceWorker, extension: extension! }
+        ? { type: event.type, sender: event.sender, extension: extensionForEvent! }
+        : { type: event.type, sender: event.serviceWorker, extension: extensionForEvent! }
 
     const result = await handler.callback(extEvent, ...args)
 
@@ -415,28 +437,43 @@ export class ExtensionRouter {
    */
   sendEvent(targetExtensionId: string | undefined, eventName: string, ...args: any[]) {
     const { listeners } = this
-    let eventListeners = listeners.get(eventName)
+    const eventListeners = listeners.get(eventName)
     const ipcName = `crx-${eventName}`
 
     if (!eventListeners || eventListeners.length === 0) {
-      // Ignore events with no listeners
+      d(`sendEvent: no listeners for '${eventName}' (extension: ${targetExtensionId ?? 'any'})`)
+      this.deliverToTargetExtensionWhenNoListener(targetExtensionId, eventName, ipcName, args)
       return
     }
 
+    const deadListeners: EventListener[] = []
+    let matchedCount = 0
     let sentCount = 0
+    let serviceWorkerAsync = 0
     for (const listener of eventListeners) {
       const { type, extensionId } = listener
 
       if (targetExtensionId && targetExtensionId !== extensionId) {
         continue
       }
+      matchedCount++
 
       if (type === 'service-worker') {
+        serviceWorkerAsync++
         const scope = `chrome-extension://${extensionId}/`
+        const argsCopy = [...args]
         this.session.serviceWorkers
           .startWorkerForScope(scope)
           .then((serviceWorker) => {
-            serviceWorker.send(ipcName, ...args)
+            setTimeout(() => {
+              if (!serviceWorker || (serviceWorker as any).isDestroyed?.()) return
+              try {
+                serviceWorker.send(ipcName, ...argsCopy)
+                d(`delivered '${eventName}' to service worker [${extensionId}]`)
+              } catch (err) {
+                d('service worker send failed for %s: %o', eventName, err)
+              }
+            }, 200)
           })
           .catch((error) => {
             d('failed to send %s to %s', eventName, extensionId)
@@ -444,16 +481,157 @@ export class ExtensionRouter {
           })
       } else {
         if (listener.host.isDestroyed()) {
-          console.error(`Unable to send '${eventName}' to extension host for ${extensionId}`)
-          return
+          deadListeners.push(listener)
+          continue
         }
-        listener.host.send(ipcName, ...args)
+        try {
+          listener.host.send(ipcName, ...args)
+          sentCount++
+        } catch (err) {
+          d('send %s to extension %s failed (host may be tearing down): %o', eventName, extensionId, err)
+          deadListeners.push(listener)
+        }
       }
-
-      sentCount++
     }
 
+    if (deadListeners.length > 0) {
+      const deadSet = new Set(deadListeners)
+      const filtered = eventListeners.filter((l) => !deadSet.has(l))
+      if (filtered.length > 0) {
+        listeners.set(eventName, filtered)
+      } else {
+        listeners.delete(eventName)
+      }
+      d(`removed ${deadListeners.length} dead listener(s) for '${eventName}'`)
+    }
+
+    // Only fall back when we did not match any listener for the target extension.
+    if (matchedCount === 0 && targetExtensionId) {
+      this.deliverToTargetExtensionWhenNoListener(targetExtensionId, eventName, ipcName, args)
+    }
+
+    if (serviceWorkerAsync > 0) {
+      d(
+        `sendEvent '${eventName}': ${sentCount} frame host(s); ${serviceWorkerAsync} service worker delivery(s) scheduled`,
+      )
+    } else {
     d(`sent '${eventName}' event to ${sentCount} listeners`)
+  }
+  }
+
+  /**
+   * Delivers an event to every listener for `eventName`, using a different
+   * argument list per extension (e.g. chrome.types.ChromeSettingGetDetails).
+   */
+  sendEventForEachListener(eventName: string, mapArgs: (extensionId: string) => any[]) {
+    const { listeners } = this
+    const eventListeners = listeners.get(eventName)
+    const ipcName = `crx-${eventName}`
+
+    if (!eventListeners || eventListeners.length === 0) {
+      d(`sendEventForEachListener: no listeners for '${eventName}'`)
+      return
+    }
+
+    const deadListeners: EventListener[] = []
+    let sentCount = 0
+    let serviceWorkerAsync = 0
+    for (const listener of eventListeners) {
+      const { type, extensionId } = listener
+      const args = mapArgs(extensionId)
+
+      if (type === 'service-worker') {
+        serviceWorkerAsync++
+        const scope = `chrome-extension://${extensionId}/`
+        const argsCopy = [...args]
+        this.session.serviceWorkers
+          .startWorkerForScope(scope)
+          .then((serviceWorker) => {
+            setTimeout(() => {
+              if (!serviceWorker || (serviceWorker as any).isDestroyed?.()) return
+              try {
+                serviceWorker.send(ipcName, ...argsCopy)
+                d(`delivered '${eventName}' to service worker [${extensionId}]`)
+              } catch (err) {
+                d('service worker send failed for %s: %o', eventName, err)
+              }
+            }, 200)
+          })
+          .catch((error) => {
+            d('failed to send %s to %s', eventName, extensionId)
+            console.error(error)
+          })
+      } else {
+        if (listener.host.isDestroyed()) {
+          deadListeners.push(listener)
+          continue
+        }
+        try {
+          listener.host.send(ipcName, ...args)
+          sentCount++
+        } catch (err) {
+          d('send %s to extension %s failed (host may be tearing down): %o', eventName, extensionId, err)
+          deadListeners.push(listener)
+        }
+      }
+    }
+
+    if (deadListeners.length > 0) {
+      const deadSet = new Set(deadListeners)
+      const filtered = eventListeners.filter((l) => !deadSet.has(l))
+      if (filtered.length > 0) {
+        listeners.set(eventName, filtered)
+      } else {
+        listeners.delete(eventName)
+      }
+      d(`removed ${deadListeners.length} dead listener(s) for '${eventName}'`)
+    }
+
+    if (serviceWorkerAsync > 0) {
+      d(
+        `sendEventForEachListener '${eventName}': ${sentCount} frame host(s); ${serviceWorkerAsync} service worker delivery(s) scheduled`,
+      )
+    } else {
+      d(`sendEventForEachListener '${eventName}' event to ${sentCount} listeners`)
+    }
+  }
+
+  /**
+   * For action-click events: MV3 service workers start lazily. When the host
+   * triggers a click for an extension that has not yet run its worker, no listener exists.
+   * Start the worker for the target extension and deliver the event after it has had time to
+   * run and register its IPC listener.
+   */
+  private deliverToTargetExtensionWhenNoListener(
+    targetExtensionId: string | undefined,
+    eventName: string,
+    ipcName: string,
+    args: any[],
+  ) {
+    if (
+      !targetExtensionId ||
+      (eventName !== 'browserAction.onClicked' && eventName !== 'action.onClicked')
+    ) {
+      return
+    }
+    const scope = `chrome-extension://${targetExtensionId}/`
+    const argsCopy = [...args]
+    this.session.serviceWorkers
+      .startWorkerForScope(scope)
+      .then((serviceWorker) => {
+        if (!serviceWorker || (serviceWorker as any).isDestroyed?.()) return
+        setTimeout(() => {
+          if (!serviceWorker || (serviceWorker as any).isDestroyed?.()) return
+          try {
+            serviceWorker.send(ipcName, ...argsCopy)
+          } catch (err) {
+            d('service worker send failed for %s: %o', eventName, err)
+          }
+        }, 400)
+      })
+      .catch((err) => {
+        console.error(err)
+      })
   }
 
   /** Broadcasts extension event to all extension hosts listening for it. */

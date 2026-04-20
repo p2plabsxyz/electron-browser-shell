@@ -14,9 +14,11 @@ npm install peersky-chrome-extensions
 
 ## Screenshots
 
-| uBlock Origin                                                                                                                                                          | Dark Reader                                                                                                                                                          |
+| VeePN                                                                                                                                                         | Ghostery Reader                                                                                                                                                          |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| <img src="https://raw.githubusercontent.com/samuelmaddock/electron-browser-shell/master/packages/electron-chrome-extensions/screenshot-ublock-origin.png" width="405"> | <img src="https://raw.githubusercontent.com/samuelmaddock/electron-browser-shell/master/packages/electron-chrome-extensions/screenshot-dark-reader.png" width="391"> |
+|<img src="./Screenshot-VPN.png" width="470"> | <img src="./Screenshot-ghostery.png" width="391"> |
+
+
 
 ## Usage
 
@@ -29,7 +31,9 @@ const { app, BrowserWindow } = require('electron')
 const { ElectronChromeExtensions } = require('peersky-chrome-extensions')
 
 app.whenReady().then(() => {
-  const extensions = new ElectronChromeExtensions()
+  const extensions = new ElectronChromeExtensions({
+    license: 'GPL-3.0',
+  })
   const browserWindow = new BrowserWindow()
 
   // Adds the active tab of the browser
@@ -54,6 +58,7 @@ app.whenReady().then(() => {
   const browserSession = session.fromPartition('persist:custom')
 
   const extensions = new ElectronChromeExtensions({
+    license: 'GPL-3.0',
     session: browserSession,
     createTab(details) {
       // Optionally implemented for chrome.tabs.create support
@@ -162,6 +167,7 @@ module.exports = {
 
 ```ts
 new ElectronChromeExtensions({
+  license: 'GPL-3.0',
   createTab(details) {
     const tab = myTabApi.createTab()
     if (details.url) {
@@ -237,7 +243,7 @@ Emitted after an extension is loaded with [chrome_urls_overrides](https://develo
 
 ### Element: `<browser-action-list>`
 
-<img src="https://raw.githubusercontent.com/samuelmaddock/electron-browser-shell/master/packages/electron-chrome-extensions/screenshot-browser-action.png" width="438">
+<img src="./screenshot-browser-action.png" width="438">
 
 The `<browser-action-list>` element provides a row of [browser actions](https://developer.chrome.com/extensions/browserAction) which may be pressed to activate the `chrome.browserAction.onClicked` event or display the extension popup.
 
@@ -406,7 +412,7 @@ See [Electron's Notification tutorial](https://www.electronjs.org/docs/tutorial/
 
 - [x] chrome.storage.local
 - [x] chrome.storage.managed - fallback to `local`
-- [x] chrome.storage.sync - fallback to `local`
+- [x] chrome.storage.sync - persisted under `extension-sync` in the app userData directory (separate from `local`; encrypted with Electron `safeStorage` when available)
 
 ### [`chrome.tabs`](https://developer.chrome.com/extensions/tabs)
 
@@ -480,11 +486,45 @@ See [Electron's Notification tutorial](https://www.electronjs.org/docs/tutorial/
 - [x] chrome.windows.onBoundsChanged
 </details>
 
+### Peersky fork: additional `chrome.*` coverage
+
+These APIs are implemented in this package (beyond the checklist above). See the source under `src/browser/api/` for details.
+
+| API | Notes |
+| --- | --- |
+| [`chrome.debugger`](https://developer.chrome.com/docs/extensions/reference/debugger/) | Attach/detach and route CDP events (requires `debugger` permission). |
+| [`chrome.identity`](https://developer.chrome.com/docs/extensions/reference/identity/) | `launchWebAuthFlow` (OAuth via hidden `BrowserWindow`). `getAuthToken` is intentionally unsupported; use web-based OAuth. Initial `options.url` must be `https`, or `http` on loopback (`localhost`, `127.0.0.1`, `::1`) for local test servers. |
+| [`chrome.proxy`](https://developer.chrome.com/docs/extensions/reference/proxy/) | Maps Chrome `ProxyConfig` to Electron `session.setProxy`. `proxy.settings.clear` only clears when the caller is the extension currently controlling proxy settings. |
+| [`chrome.declarativeNetRequest`](https://developer.chrome.com/docs/extensions/reference/declarativeNetRequest/) | Rule evaluation for static/dynamic/session rules; integrates with the app’s `webRequest` bridge for blocking/redirects. |
+| [`chrome.webRequest`](https://developer.chrome.com/docs/extensions/reference/webRequest/) | Requires app-side hooks (`notifyWebRequest*` methods on `ElectronChromeExtensions`). |
+| [`chrome.scripting`](https://developer.chrome.com/docs/extensions/reference/scripting/) | Script injection where supported by Electron. |
+| [`chrome.management`](https://developer.chrome.com/docs/extensions/reference/management/) | Limited extension metadata helpers. |
+| [`chrome.permissions`](https://developer.chrome.com/docs/extensions/reference/permissions/) | Runtime grants update an internal permission map; router permission checks honor **optional** permissions granted via `chrome.permissions.request`, not only `manifest.permissions`. |
+
+### Development & testing
+
+From the `peersky-chrome-extensions` directory:
+
+```bash
+yarn install
+yarn build
+yarn test
+```
+
+The test suite runs **Electron + Mocha** (see `spec/index.js`). It expects a dev install that includes `yargs` (listed in `devDependencies`).
+
+- **CI-equivalent run** (build + tests): `yarn test:ci`
+- **Native messaging tests** (`spec/chrome-nativeMessaging-spec.ts`) build a small SEA host under `script/native-messaging-host/`. That step can be slow or flaky on some Windows/CI machines. In GitHub Actions we set `SKIP_NATIVE_MESSAGING=1` so the rest of the suite stays green; to run those tests locally, omit that variable and use a machine where `node script/native-messaging-host/build.js <extensionId>` completes successfully.
+
+### Continuous integration
+
+The workflow `.github/workflows/peersky-chrome-extensions.yml` runs `yarn install --frozen-lockfile` and `yarn test:ci` on Ubuntu (with `xvfb-run`) and Windows when files under `peersky-chrome-extensions/` change.
+
 ## Limitations
 
 ### peersky-chrome-extensions
 
-- The latest version of Electron is recommended. Minimum support requires Electron v35.0.0-beta.8.
+- The latest version of Electron is recommended. `package.json` declares `peerDependencies.electron` as `>=35.0.0`.
 - All background scripts are persistent.
 
 ### electron
@@ -497,5 +537,7 @@ See [Electron's Notification tutorial](https://www.electronjs.org/docs/tutorial/
 ## License
 
 GPL-3
+
+This package is published from the Peersky fork ([github.com/p2plabsxyz/peersky-browser-shell](https://github.com/p2plabsxyz/peersky-browser-shell)); see `LICENSE.md` in the tarball.
 
 For proprietary use, please [contact me](mailto:sam@samuelmaddock.com?subject=electron-chrome-extensions%20license) or [sponsor me on GitHub](https://github.com/sponsors/samuelmaddock/) under the appropriate tier to [acquire a proprietary-use license](https://github.com/samuelmaddock/electron-browser-shell/blob/master/LICENSE-PATRON.md). These contributions help make development and maintenance of this project more sustainable and show appreciation for the work thus far.
