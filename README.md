@@ -16,9 +16,9 @@ npm install peersky-chrome-extensions
 
 | VeePN                                                                                                                                                         | Ghostery Reader                                                                                                                                                          |
 | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|<img src="https://raw.githubusercontent.com/p2plabsxyz/peersky-browser-shell/master/Screenshot-VPN.png" width="405"> | <img src="https://raw.githubusercontent.com/p2plabsxyz/peersky-browser-shell/master/Screenshot-ghostery.png" width="391"> |
+|<img src="./Screenshot-VPN.png" width="470"> | <img src="./Screenshot-ghostery.png" width="391"> |
 
-Screenshots are stored in the GitHub repository only; the published npm package does not include `.png` files, so they will not appear on [npmjs.com](https://www.npmjs.com/package/peersky-chrome-extensions).
+
 
 ## Usage
 
@@ -243,7 +243,7 @@ Emitted after an extension is loaded with [chrome_urls_overrides](https://develo
 
 ### Element: `<browser-action-list>`
 
-<img src="https://raw.githubusercontent.com/p2plabsxyz/peersky-browser-shell/master/screenshot-browser-action.png" width="438">
+<img src="./screenshot-browser-action.png" width="438">
 
 The `<browser-action-list>` element provides a row of [browser actions](https://developer.chrome.com/extensions/browserAction) which may be pressed to activate the `chrome.browserAction.onClicked` event or display the extension popup.
 
