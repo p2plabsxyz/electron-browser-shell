@@ -1,6 +1,6 @@
 {
-  "name": "@p2plabs/peersky-browser-shell",
-  "version": "1.0.0",
+  "name": "@p2plabs/peersky-chrome-extensions",
+  "version": "1.0.1",
   "description": "Fork of electron-browser-shell with extended Chrome API implementations for browser extensions",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.mjs",

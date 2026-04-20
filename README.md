@@ -1,6 +1,8 @@
-# peersky-chrome-extensions
+# @p2plabs/peersky-chrome-extensions
 
 > Chrome extension API support for Electron, built for Peersky.
+
+Npm: [`@p2plabs/peersky-chrome-extensions`](https://www.npmjs.com/package/@p2plabs/peersky-chrome-extensions).
 
 Electron provides [basic support for Chrome extensions](https://www.electronjs.org/docs/api/extensions) out of the box. However, it only supports a subset of APIs with a focus on DevTools. Concepts like tabs, popups, and extension actions aren't known to Electron.
 
@@ -9,7 +11,7 @@ This library aims to bring extension support in Electron up to the level you'd c
 ## Install
 
 ```
-npm install @p2plabs/peersky-browser-shell
+npm install @p2plabs/peersky-chrome-extensions
 ```
 
 ## Screenshots
@@ -28,7 +30,7 @@ Simple browser using Electron's [default session](https://www.electronjs.org/doc
 
 ```js
 const { app, BrowserWindow } = require('electron')
-const { ElectronChromeExtensions } = require('peersky-chrome-extensions')
+const { ElectronChromeExtensions } = require('@p2plabs/peersky-chrome-extensions')
 
 app.whenReady().then(() => {
   const extensions = new ElectronChromeExtensions({
@@ -52,7 +54,7 @@ Multi-tab browser with full support for Chrome extension APIs.
 
 ```js
 const { app, session, BrowserWindow } = require('electron')
-const { ElectronChromeExtensions } = require('peersky-chrome-extensions')
+const { ElectronChromeExtensions } = require('@p2plabs/peersky-chrome-extensions')
 
 app.whenReady().then(() => {
   const browserSession = session.fromPartition('persist:custom')
@@ -105,7 +107,7 @@ This module uses a [preload script](https://www.electronjs.org/docs/latest/tutor
 When packaging your application, it's required that the preload script is included. This can be
 handled in two ways:
 
-1. Include `node_modules` in your packaged app. This allows `peersky-chrome-extensions/preload` to
+1. Include `node_modules` in your packaged app. This allows `@p2plabs/peersky-chrome-extensions/preload` to
    be resolved.
 2. In the case of using JavaScript bundlers, you may need to copy the preload script next to your
    app's entry point script. You can try using
@@ -121,7 +123,7 @@ module.exports = {
   entry: './index.js',
   plugins: [
     new CopyWebpackPlugin({
-      patterns: [require.resolve('peersky-chrome-extensions/preload')],
+      patterns: [require.resolve('@p2plabs/peersky-chrome-extensions/preload')],
     }),
   ],
 }
@@ -263,7 +265,7 @@ To enable the element on a webpage, you must define a preload script which injec
 Inject the browserAction API to make the `<browser-action-list>` element accessible in your application.
 
 ```js
-import { injectBrowserAction } from 'peersky-chrome-extensions/browser-action'
+import { injectBrowserAction } from '@p2plabs/peersky-chrome-extensions/browser-action'
 
 // Inject <browser-action-list> element into our page
 if (location.href === 'webui://browser-chrome.html') {
@@ -299,7 +301,7 @@ where it's intended to be displayed.
 
 ```js
 import { app, session } from 'electron'
-import { ElectronChromeExtensions } from 'peersky-chrome-extensions'
+import { ElectronChromeExtensions } from '@p2plabs/peersky-chrome-extensions'
 
 app.whenReady().then(() => {
   // Provide the session where your app will display <browser-action-list>
@@ -522,7 +524,7 @@ The workflow `.github/workflows/peersky-chrome-extensions.yml` runs `yarn instal
 
 ## Limitations
 
-### peersky-chrome-extensions
+### `@p2plabs/peersky-chrome-extensions`
 
 - The latest version of Electron is recommended. `package.json` declares `peerDependencies.electron` as `>=35.0.0`.
 - All background scripts are persistent.
