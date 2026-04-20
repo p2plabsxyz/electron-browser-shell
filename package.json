@@ -1,10 +1,13 @@
 {
-  "name": "peersky-chrome-extensions",
-  "version": "4.9.0",
+  "name": "@peersky/peersky-browser-shell",
+  "version": "1.0.0",
   "description": "Fork of electron-browser-shell with extended Chrome API implementations for browser extensions",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.mjs",
   "types": "./dist/types/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/types/index.d.ts",
