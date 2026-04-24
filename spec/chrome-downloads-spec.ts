@@ -55,4 +55,22 @@ describe('chrome.downloads', () => {
     const hit = results.find((item: any) => item.url === downloadUrl)
     expect(hit).to.be.an('object')
   })
+
+  it('erase removes stored download entries and emits onErased', async () => {
+    const id = await browser.crx.exec('downloads.download', { url: downloadUrl })
+    await new Promise<void>((resolve) => setTimeout(resolve, 75))
+
+    const erasedEvent = browser.crx.eventOnce('downloads.onErased')
+    const erased = await browser.crx.exec('downloads.erase', { id })
+    const [erasedId] = await erasedEvent
+
+    expect(erased).to.be.an('array')
+    expect(erased).to.include(id)
+    expect(erasedId).to.equal(id)
+  })
+
+  it('returns explicit errors for unsupported methods', async () => {
+    const getFileIconResult = await browser.crx.exec('downloads.getFileIcon', 1)
+    expect(getFileIconResult).to.equal(null)
+  })
 })

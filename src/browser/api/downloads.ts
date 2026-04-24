@@ -1,5 +1,7 @@
 import { ExtensionContext } from '../context'
 import { ExtensionEvent } from '../router'
+import { app } from 'electron'
+import path from 'node:path'
 
 type PersistedDownloadItem = {
   id: number
@@ -25,6 +27,8 @@ type PersistedDownloadsState = {
 type PendingDownloadRequest = {
   extensionId: string
   id: number
+  filename?: string
+  saveAs?: boolean
 }
 
 const DOWNLOADS_STATE_NS = 'downloads'
@@ -34,6 +38,7 @@ export class DownloadsAPI {
   private records = new Map<number, PersistedDownloadItem>()
   private pendingByUrl = new Map<string, PendingDownloadRequest[]>()
   private itemIdByDownloadItem = new WeakMap<Electron.DownloadItem, number>()
+  private activeItems = new Map<number, Electron.DownloadItem>()
 
   constructor(private ctx: ExtensionContext) {
     const handle = this.ctx.router.apiHandler()
@@ -41,6 +46,17 @@ export class DownloadsAPI {
     // Avoid hard-failing calls so real-world extensions can still run.
     handle('downloads.download', this.download)
     handle('downloads.search', this.search)
+    handle('downloads.pause', this.pause)
+    handle('downloads.resume', this.resume)
+    handle('downloads.cancel', this.cancel)
+    handle('downloads.erase', this.erase)
+    handle('downloads.acceptDanger', this.unsupported('downloads.acceptDanger'))
+    handle('downloads.getFileIcon', this.unsupported('downloads.getFileIcon'))
+    handle('downloads.open', this.unsupported('downloads.open'))
+    handle('downloads.removeFile', this.unsupported('downloads.removeFile'))
+    handle('downloads.setUiOptions', this.unsupported('downloads.setUiOptions'))
+    handle('downloads.show', this.unsupported('downloads.show'))
+    handle('downloads.showDefaultFolder', this.unsupported('downloads.showDefaultFolder'))
 
     this.restore()
     this.observeSessionDownloads()
@@ -72,12 +88,23 @@ export class DownloadsAPI {
       const url = item.getURL()
       const pending = this.consumePending(url)
       if (!pending) return
-      const { extensionId, id } = pending
+      const { extensionId, id, filename, saveAs } = pending
 
       const extension = (this.ctx.session.extensions || this.ctx.session).getExtension(extensionId)
       if (!extension) return
 
+      if (filename) {
+        const defaultPath = path.join(app.getPath('downloads'), path.basename(filename))
+        const itemAny = item as any
+        if (saveAs && typeof itemAny.setSaveDialogOptions === 'function') {
+          itemAny.setSaveDialogOptions({ defaultPath })
+        } else {
+          item.setSavePath(defaultPath)
+        }
+      }
+
       this.itemIdByDownloadItem.set(item, id)
+      this.activeItems.set(id, item)
 
       const record: PersistedDownloadItem = {
         id,
@@ -139,6 +166,7 @@ export class DownloadsAPI {
           state: { previous: previousState, current: record.state },
           bytesReceived: { current: record.bytesReceived },
         })
+        this.activeItems.delete(id)
       })
     })
   }
@@ -171,7 +199,12 @@ export class DownloadsAPI {
     }
 
     const id = this.nextId++
-    this.enqueuePending(url, { extensionId: extension.id, id })
+    this.enqueuePending(url, {
+      extensionId: extension.id,
+      id,
+      filename: options?.filename,
+      saveAs: options?.saveAs,
+    })
     const sessionAny = this.ctx.session as any
     if (typeof sessionAny.downloadURL === 'function') {
       sessionAny.downloadURL(url)
@@ -202,5 +235,57 @@ export class DownloadsAPI {
     }
 
     return items.map((item) => ({ ...item }))
+  }
+
+  private findRecordForExtension(extensionId: string, id: number): PersistedDownloadItem | undefined {
+    const record = this.records.get(id)
+    if (!record || record.extensionId !== extensionId) return undefined
+    return record
+  }
+
+  private pause = async ({ extension }: ExtensionEvent, id: number): Promise<void> => {
+    const record = this.findRecordForExtension(extension.id, id)
+    if (!record) throw new Error(`No download with id ${id}`)
+    const item = this.activeItems.get(id)
+    if (!item) throw new Error(`Download ${id} is not active`)
+    item.pause()
+  }
+
+  private resume = async ({ extension }: ExtensionEvent, id: number): Promise<void> => {
+    const record = this.findRecordForExtension(extension.id, id)
+    if (!record) throw new Error(`No download with id ${id}`)
+    const item = this.activeItems.get(id)
+    if (!item) throw new Error(`Download ${id} is not active`)
+    item.resume()
+  }
+
+  private cancel = async ({ extension }: ExtensionEvent, id: number): Promise<void> => {
+    const record = this.findRecordForExtension(extension.id, id)
+    if (!record) throw new Error(`No download with id ${id}`)
+    const item = this.activeItems.get(id)
+    if (!item) throw new Error(`Download ${id} is not active`)
+    item.cancel()
+  }
+
+  private erase = async ({ extension }: ExtensionEvent, query: chrome.downloads.DownloadQuery = {}) => {
+    const erasedIds: number[] = []
+    for (const record of this.records.values()) {
+      if (record.extensionId !== extension.id) continue
+      if (typeof query.id === 'number' && record.id !== query.id) continue
+      this.records.delete(record.id)
+      this.activeItems.delete(record.id)
+      erasedIds.push(record.id)
+      this.ctx.router.sendEvent(extension.id, 'downloads.onErased', record.id)
+    }
+    if (erasedIds.length > 0) {
+      this.persist()
+    }
+    return erasedIds
+  }
+
+  private unsupported = (method: string) => {
+    return async () => {
+      throw new Error(`${method} is not supported yet`)
+    }
   }
 }
