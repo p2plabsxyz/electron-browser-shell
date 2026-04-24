@@ -145,6 +145,11 @@ export class PopupView extends EventEmitter {
           }
         }
       } catch (_) {}
+      // Native dialogs opened from popup actions (e.g. file pickers) can move
+      // focus outside the app temporarily. Keep the popup alive in that case.
+      if (!getAllWindows().some((window) => window.isFocused())) {
+        return
+      }
       const focused = BrowserWindow.getFocusedWindow()
       if (focused !== win) {
         this.destroy()
