@@ -747,11 +747,25 @@ export const injectExtensionAPIs = () => {
               return fn(...args)
             }
 
+          /** storage.get must never pass undefined to callbacks (extensions index nested prefs). */
+          const cbWrapStorageGet = (fn: (...a: any[]) => Promise<any>) =>
+            (...args: any[]) => {
+              const last = args[args.length - 1]
+              if (typeof last === 'function') {
+                const cb = args.pop()
+                fn(...args)
+                  .then((r) => cb(r != null && typeof r === 'object' ? r : {}))
+                  .catch(() => cb({}))
+                return
+              }
+              return fn(...args).then((r) => (r != null && typeof r === 'object' ? r : {}))
+            }
+
           // Per-area onChanged is required by real extensions (e.g. Dark Reader uses
           // chrome.storage.local.onChanged). It aliases the same listeners as
           // chrome.storage.onChanged; the event payload includes the storage area.
           const ipcLocal = {
-            get: cbWrap(invokeExtension('storage.local.get')),
+            get: cbWrapStorageGet(invokeExtension('storage.local.get')),
             set: cbWrap(invokeExtension('storage.local.set')),
             remove: cbWrap(invokeExtension('storage.local.remove')),
             clear: cbWrap(invokeExtension('storage.local.clear')),
@@ -769,7 +783,7 @@ export const injectExtensionAPIs = () => {
             sync: {
               ...(base as any)?.sync ?? ipcLocal,
               onChanged,
-              get: cbWrap(invokeExtension('storage.sync.get')),
+              get: cbWrapStorageGet(invokeExtension('storage.sync.get')),
               set: cbWrap(invokeExtension('storage.sync.set')),
               remove: cbWrap(invokeExtension('storage.sync.remove')),
               clear: cbWrap(invokeExtension('storage.sync.clear')),
@@ -818,11 +832,17 @@ export const injectExtensionAPIs = () => {
             remove: invokeExtension('tabs.remove'),
             goBack: invokeExtension('tabs.goBack'),
             goForward: invokeExtension('tabs.goForward'),
+            duplicate: invokeExtension('tabs.duplicate'),
+            getZoom: invokeExtension('tabs.getZoom'),
+            setZoom: invokeExtension('tabs.setZoom'),
+            getZoomSettings: invokeExtension('tabs.getZoomSettings'),
+            setZoomSettings: invokeExtension('tabs.setZoomSettings'),
             onCreated: new ExtensionEvent('tabs.onCreated'),
             onRemoved: new ExtensionEvent('tabs.onRemoved'),
             onUpdated: new ExtensionEvent('tabs.onUpdated'),
             onActivated: new ExtensionEvent('tabs.onActivated'),
             onReplaced: new ExtensionEvent('tabs.onReplaced'),
+            onZoomChange: new ExtensionEvent('tabs.onZoomChange'),
           }
           return api
         },

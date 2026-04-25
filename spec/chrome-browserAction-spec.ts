@@ -134,18 +134,29 @@ describe('chrome.browserAction', () => {
     })
 
     const props = [
-      { method: 'BadgeBackgroundColor', detail: 'color', value: '#cacaca' },
+      {
+        method: 'BadgeBackgroundColor',
+        detail: 'color',
+        value: '#cacaca',
+        /** Chrome getBadgeBackgroundColor returns a ColorArray, not the hex passed to set. */
+        expectedAfterSet: [202, 202, 202, 255],
+      },
       { method: 'BadgeText', detail: 'text' },
       { method: 'Popup', detail: 'popup' },
       { method: 'Title', detail: 'title' },
     ]
 
-    for (const { method, detail, value } of props) {
+    for (const { method, detail, value, expectedAfterSet } of props) {
       it(`sets and gets '${detail}'`, async () => {
         const newValue = value || uuid()
         await browser.crx.exec(`browserAction.set${method}`, { [detail]: newValue })
         const result = await browser.crx.exec(`browserAction.get${method}`)
-        expect(result).to.equal(newValue)
+        const expected = expectedAfterSet ?? newValue
+        if (expectedAfterSet) {
+          expect(result).to.deep.equal(expected)
+        } else {
+          expect(result).to.equal(expected)
+        }
       })
 
       it(`restores initial values for '${detail}'`, async () => {
@@ -154,7 +165,11 @@ describe('chrome.browserAction', () => {
         await browser.crx.exec(`browserAction.set${method}`, { [detail]: newValue })
         await browser.crx.exec(`browserAction.set${method}`, { [detail]: null })
         const result = await browser.crx.exec(`browserAction.get${method}`)
-        expect(result).to.equal(initial)
+        if (expectedAfterSet) {
+          expect(result).to.deep.equal(initial)
+        } else {
+          expect(result).to.equal(initial)
+        }
       })
     }
 

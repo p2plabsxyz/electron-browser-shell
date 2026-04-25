@@ -30,6 +30,33 @@ interface ExtensionAction {
 
 type ExtensionActionKey = keyof ExtensionAction
 
+/** Chrome ColorArray; default when unset per extension API docs. */
+function normalizeBadgeBackgroundColor(raw: unknown): [number, number, number, number] {
+  if (Array.isArray(raw) && raw.length >= 4) {
+    const [r, g, b, a] = raw
+    return [
+      Math.max(0, Math.min(255, Number(r) || 0)),
+      Math.max(0, Math.min(255, Number(g) || 0)),
+      Math.max(0, Math.min(255, Number(b) || 0)),
+      Math.max(0, Math.min(255, Number(a) || 0)),
+    ]
+  }
+  if (typeof raw === 'string') {
+    const m = raw.trim().match(/^#([0-9a-f]{6})([0-9a-f]{2})?$/i)
+    if (m) {
+      const h = m[1]
+      const aByte = m[2] ? parseInt(m[2], 16) : 255
+      return [
+        parseInt(h.slice(0, 2), 16),
+        parseInt(h.slice(2, 4), 16),
+        parseInt(h.slice(4, 6), 16),
+        Math.max(0, Math.min(255, aByte)),
+      ]
+    }
+  }
+  return [0, 0, 0, 0]
+}
+
 interface ActivateDetails {
   eventType: string
   extensionId: string
@@ -134,8 +161,16 @@ export class BrowserActionAPI {
       handle(`browserAction.set${prop}`, setter(key))
     }
 
-    handleProp('BadgeBackgroundColor', 'color')
-    handleProp('BadgeText', 'text')
+    handle('browserAction.getBadgeBackgroundColor', (event, details?: chrome.browserAction.TabDetails) =>
+      normalizeBadgeBackgroundColor(getter('color')(event, details)),
+    )
+    handle('browserAction.setBadgeBackgroundColor', setter('color'))
+
+    handle('browserAction.getBadgeText', (event, details?: chrome.browserAction.TabDetails) => {
+      const raw = getter('text')(event, details)
+      return raw == null ? '' : String(raw)
+    })
+    handle('browserAction.setBadgeText', setter('text'))
     handleProp('Title', 'title')
     handleProp('Popup', 'popup')
 

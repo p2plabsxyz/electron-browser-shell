@@ -26,6 +26,9 @@ export class TabsAPI {
   static TAB_ID_NONE = -1
   static WINDOW_ID_NONE = -1
   static WINDOW_ID_CURRENT = -2
+  private tabZoomSettings = new Map<number, chrome.tabs.ZoomSettings>()
+  private tabZoomFactors = new Map<number, number>()
+  private originZoomFactors = new Map<string, number>()
 
   constructor(private ctx: ExtensionContext) {
     const handle = this.ctx.router.apiHandler()
@@ -40,6 +43,11 @@ export class TabsAPI {
     handle('tabs.remove', this.remove.bind(this))
     handle('tabs.goForward', this.goForward.bind(this))
     handle('tabs.goBack', this.goBack.bind(this))
+    handle('tabs.duplicate', this.duplicate.bind(this))
+    handle('tabs.getZoom', this.getZoom.bind(this))
+    handle('tabs.setZoom', this.setZoom.bind(this))
+    handle('tabs.getZoomSettings', this.getZoomSettings.bind(this))
+    handle('tabs.setZoomSettings', this.setZoomSettings.bind(this))
     handle('tabs.captureVisibleTab', this.captureVisibleTab.bind(this), { permission: 'tabs' })
 
     this.ctx.store.on('tab-added', this.observeTab.bind(this))
@@ -127,6 +135,7 @@ export class TabsAPI {
     ]
 
     const updateHandler = () => {
+      this.applyStoredZoomForTab(tab)
       this.onUpdated(tabId)
     }
 
@@ -147,10 +156,13 @@ export class TabsAPI {
       tab.off('page-favicon-updated', faviconHandler)
 
       this.ctx.store.removeTab(tab)
+      this.tabZoomSettings.delete(tabId)
+      this.tabZoomFactors.delete(tabId)
       this.onRemoved(tabId)
     })
 
     this.onCreated(tabId)
+    this.applyStoredZoomForTab(tab)
     this.onActivated(tabId)
 
     d(`Observing tab[${tabId}][${tab.getType()}] ${tab.getURL()}`)
@@ -433,6 +445,204 @@ export class TabsAPI {
       : this.ctx.store.getActiveTabOfCurrentWindow()
     if (!tab) return
     tab.navigationHistory.goBack()
+  }
+
+  private async duplicate(event: ExtensionEvent, tabId: number) {
+    const tab = this.ctx.store.getTabById(tabId)
+    if (!tab) {
+      throw new Error(`No tab with id ${tabId}`)
+    }
+
+    const tabDetails = this.getTabDetails(tab)
+    const rawUrl = tab.getURL()
+    const cachedUrl = tabDetails.url
+    const resolvedUrl =
+      (typeof rawUrl === 'string' && rawUrl.length > 0 ? rawUrl : undefined) ||
+      (typeof cachedUrl === 'string' && cachedUrl.length > 0 ? cachedUrl : undefined)
+
+    let openUrl: string | undefined
+    if (resolvedUrl) {
+      try {
+        openUrl = validateExtensionUrl(resolvedUrl, event.extension)
+      } catch {
+        openUrl = resolvedUrl
+      }
+    }
+
+    const duplicateTab = await this.ctx.store.createTab({
+      url: openUrl,
+      active: true,
+      windowId: tabDetails.windowId,
+    })
+    const details = this.getTabDetails(duplicateTab)
+    const urlForResult = (openUrl || resolvedUrl || details.url || '').trim()
+    if (urlForResult) {
+      details.url = urlForResult
+    }
+    return details
+  }
+
+  private getOriginKey(tab: TabContents): string | undefined {
+    const rawUrl = tab.getURL()
+    if (!rawUrl || typeof rawUrl !== 'string') return undefined
+    try {
+      const parsed = new URL(rawUrl)
+      if (parsed.origin === 'null') return undefined
+      return parsed.origin
+    } catch {
+      return undefined
+    }
+  }
+
+  private getTabZoomSettings(tabId: number): chrome.tabs.ZoomSettings {
+    const settings = this.tabZoomSettings.get(tabId)
+    if (settings) return settings
+    return {
+      mode: 'automatic',
+      scope: 'per-origin',
+      defaultZoomFactor: 1,
+    }
+  }
+
+  private setTabZoomFactor(tab: TabContents, factor: number) {
+    tab.setZoomFactor(factor)
+    this.tabZoomFactors.set(tab.id, factor)
+  }
+
+  private emitZoomChange(
+    tab: TabContents,
+    oldZoomFactor: number,
+    newZoomFactor: number,
+    zoomSettings: chrome.tabs.ZoomSettings,
+  ) {
+    this.ctx.router.broadcastEvent('tabs.onZoomChange', {
+      tabId: tab.id,
+      oldZoomFactor,
+      newZoomFactor,
+      zoomSettings,
+    } satisfies chrome.tabs.ZoomChangeInfo)
+  }
+
+  private applyStoredZoomForTab(tab: TabContents) {
+    if (!tab || tab.isDestroyed()) return
+    const settings = this.getTabZoomSettings(tab.id)
+    if (settings.mode === 'disabled') return
+
+    let nextZoom: number | undefined
+    if (settings.scope === 'per-tab') {
+      nextZoom = this.tabZoomFactors.get(tab.id)
+    } else {
+      const origin = this.getOriginKey(tab)
+      if (origin) nextZoom = this.originZoomFactors.get(origin)
+    }
+
+    if (typeof nextZoom === 'number' && Number.isFinite(nextZoom) && nextZoom > 0) {
+      const current = tab.getZoomFactor()
+      if (Math.abs(current - nextZoom) >= 0.0001) {
+        this.setTabZoomFactor(tab, nextZoom)
+      }
+    }
+  }
+
+  private getZoom(event: ExtensionEvent, tabId?: number) {
+    const tab = typeof tabId === 'number' ? this.ctx.store.getTabById(tabId) : this.ctx.store.getActiveTabOfCurrentWindow()
+    if (!tab) return 1
+    const factor = tab.getZoomFactor()
+    return typeof factor === 'number' && Number.isFinite(factor) ? factor : 1
+  }
+
+  private setZoom(event: ExtensionEvent, tabIdOrFactor?: number, maybeFactor?: number) {
+    const hasTabId = typeof maybeFactor === 'number'
+    const tabId = hasTabId ? (tabIdOrFactor as number) : undefined
+    let factor = (hasTabId ? maybeFactor : tabIdOrFactor) as number
+    const tab = typeof tabId === 'number' ? this.ctx.store.getTabById(tabId) : this.ctx.store.getActiveTabOfCurrentWindow()
+    if (!tab) {
+      throw new Error('No active tab available to set zoom')
+    }
+    const settings = this.getTabZoomSettings(tab.id)
+    if (settings.mode === 'disabled') {
+      throw new Error('tabs.setZoom is not available when zoom mode is disabled')
+    }
+    if (typeof factor !== 'number' || !Number.isFinite(factor) || factor < 0) {
+      throw new Error('tabs.setZoom requires a non-negative numeric zoom factor')
+    }
+    if (factor === 0) {
+      factor = settings.defaultZoomFactor ?? 1
+    }
+    if (!Number.isFinite(factor) || factor <= 0) {
+      throw new Error('tabs.setZoom requires a positive zoom factor')
+    }
+
+    const oldZoomFactor = tab.getZoomFactor()
+    if (settings.scope === 'per-tab') {
+      this.setTabZoomFactor(tab, factor)
+    } else {
+      const origin = this.getOriginKey(tab)
+      if (origin) {
+        this.originZoomFactors.set(origin, factor)
+        const sameOriginTabs = Array.from(this.ctx.store.tabs).filter((candidate) => {
+          if (candidate.isDestroyed()) return false
+          return this.getOriginKey(candidate) === origin
+        })
+        sameOriginTabs.forEach((candidate) => this.setTabZoomFactor(candidate, factor))
+      } else {
+        this.setTabZoomFactor(tab, factor)
+      }
+    }
+    this.emitZoomChange(tab, oldZoomFactor, factor, settings)
+  }
+
+  private getZoomSettings(event: ExtensionEvent, tabId?: number): chrome.tabs.ZoomSettings {
+    const tab = typeof tabId === 'number' ? this.ctx.store.getTabById(tabId) : this.ctx.store.getActiveTabOfCurrentWindow()
+    if (!tab) {
+      return {
+        mode: 'automatic',
+        scope: 'per-origin',
+        defaultZoomFactor: 1,
+      }
+    }
+    const current = this.getTabZoomSettings(tab.id)
+    const defaultZoomFactor =
+      typeof current.defaultZoomFactor === 'number' && current.defaultZoomFactor > 0
+        ? current.defaultZoomFactor
+        : 1
+    return { ...current, defaultZoomFactor }
+  }
+
+  private setZoomSettings(
+    event: ExtensionEvent,
+    tabIdOrSettings?: number | chrome.tabs.ZoomSettings,
+    maybeSettings?: chrome.tabs.ZoomSettings,
+  ) {
+    const tabId = typeof tabIdOrSettings === 'number' ? tabIdOrSettings : undefined
+    const settings =
+      typeof tabIdOrSettings === 'number' ? maybeSettings : (tabIdOrSettings as chrome.tabs.ZoomSettings)
+    if (!settings) return
+    const tab =
+      typeof tabId === 'number' ? this.ctx.store.getTabById(tabId) : this.ctx.store.getActiveTabOfCurrentWindow()
+    if (!tab) return
+
+    if (settings.mode && !['automatic', 'manual', 'disabled'].includes(settings.mode)) {
+      throw new Error(`tabs.setZoomSettings mode "${settings.mode}" is not supported`)
+    }
+    if (settings.scope && !['per-origin', 'per-tab'].includes(settings.scope)) {
+      throw new Error(`tabs.setZoomSettings scope "${settings.scope}" is not supported`)
+    }
+    if (
+      typeof settings.defaultZoomFactor !== 'undefined' &&
+      (!Number.isFinite(settings.defaultZoomFactor) || settings.defaultZoomFactor <= 0)
+    ) {
+      throw new Error('tabs.setZoomSettings defaultZoomFactor must be a positive number')
+    }
+
+    const prev = this.getTabZoomSettings(tab.id)
+    const next: chrome.tabs.ZoomSettings = {
+      mode: settings.mode ?? prev.mode ?? 'automatic',
+      scope: settings.scope ?? prev.scope ?? 'per-origin',
+      defaultZoomFactor: settings.defaultZoomFactor ?? prev.defaultZoomFactor ?? 1,
+    }
+    this.tabZoomSettings.set(tab.id, next)
+    this.applyStoredZoomForTab(tab)
   }
 
   onCreated(tabId: number) {

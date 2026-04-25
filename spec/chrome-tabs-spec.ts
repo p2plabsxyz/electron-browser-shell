@@ -267,6 +267,72 @@ describe('chrome.tabs', () => {
     })
   })
 
+  describe('duplicate()', () => {
+    it('duplicates a tab in the same window with the same URL', async () => {
+      const source = await browser.crx.exec('tabs.get', browser.window.webContents.id)
+
+      const duplicated = await browser.crx.exec('tabs.duplicate', source.id)
+      expect(duplicated).to.be.an('object')
+      expect(duplicated.id).to.not.equal(source.id)
+      expect(duplicated.windowId).to.equal(source.windowId)
+      expect(duplicated.url).to.equal(source.url)
+    })
+  })
+
+  describe('zoom methods', () => {
+    it('supports zoom roundtrip', async () => {
+      const tabId = browser.window.webContents.id
+      const initial = await browser.crx.exec('tabs.getZoom', tabId)
+      expect(initial).to.be.a('number')
+
+      await browser.crx.exec('tabs.setZoom', tabId, 1.25)
+      const updated = await browser.crx.exec('tabs.getZoom', tabId)
+      expect(updated).to.be.closeTo(1.25, 0.01)
+    })
+
+    it('supports reset via setZoom(..., 0)', async () => {
+      const tabId = browser.window.webContents.id
+      await browser.crx.exec('tabs.setZoom', tabId, 1.35)
+      const changed = await browser.crx.exec('tabs.getZoom', tabId)
+      expect(changed).to.be.closeTo(1.35, 0.01)
+
+      await browser.crx.exec('tabs.setZoom', tabId, 0)
+      const reset = await browser.crx.exec('tabs.getZoom', tabId)
+      expect(reset).to.be.closeTo(1, 0.01)
+    })
+
+    it('returns zoom settings and accepts supported settings', async () => {
+      const tabId = browser.window.webContents.id
+      const settings = await browser.crx.exec('tabs.getZoomSettings', tabId)
+      expect(settings).to.be.an('object')
+      expect(settings.mode).to.equal('automatic')
+      expect(settings.scope).to.equal('per-origin')
+
+      await browser.crx.exec('tabs.setZoomSettings', tabId, {
+        mode: 'automatic',
+        scope: 'per-origin',
+      })
+      const after = await browser.crx.exec('tabs.getZoomSettings', tabId)
+      expect(after.mode).to.equal('automatic')
+      expect(after.scope).to.equal('per-origin')
+    })
+
+    it('accepts per-tab manual settings', async () => {
+      const tabId = browser.window.webContents.id
+      await browser.crx.exec('tabs.setZoomSettings', tabId, {
+        mode: 'manual',
+        scope: 'per-tab',
+        defaultZoomFactor: 1.1,
+      })
+      await browser.crx.exec('tabs.setZoom', tabId, 1.2)
+
+      const settings = await browser.crx.exec('tabs.getZoomSettings', tabId)
+      expect(settings).to.be.an('object')
+      expect(settings.mode).to.equal('manual')
+      expect(settings.scope).to.equal('per-tab')
+    })
+  })
+
   describe('executeScript()', () => {
     it('injects code into a tab', async () => {
       const tabId = browser.window.webContents.id
