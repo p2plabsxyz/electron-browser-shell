@@ -522,18 +522,25 @@ export const injectExtensionAPIs = () => {
 
       extension: {
         factory: (base) => {
+          const ipcGetViews = invokeExtension('extension.getViews')
           return {
             ...base,
-            isAllowedFileSchemeAccess: invokeExtension('extension.isAllowedFileSchemeAccess', {
-              noop: true,
-              defaultResponse: false,
-            }),
-            isAllowedIncognitoAccess: invokeExtension('extension.isAllowedIncognitoAccess', {
-              noop: true,
-              defaultResponse: false,
-            }),
-            // TODO: Add native implementation
-            getViews: () => [],
+            isAllowedFileSchemeAccess: invokeExtension('extension.isAllowedFileSchemeAccess'),
+            isAllowedIncognitoAccess: invokeExtension('extension.isAllowedIncognitoAccess'),
+            getViews: async (fetchProperties?: { type?: string; windowId?: number; tabId?: number }) => {
+              const views = (await ipcGetViews(fetchProperties)) || []
+              // Best-effort: if we're in a popup context and caller asks for popup views,
+              // expose the current window object to align with common extension checks.
+              if (fetchProperties?.type === 'popup') {
+                try {
+                  const href = typeof location !== 'undefined' ? String(location.href || '') : ''
+                  if (href.startsWith('chrome-extension://')) {
+                    return [window]
+                  }
+                } catch {}
+              }
+              return views
+            },
           }
         },
       },

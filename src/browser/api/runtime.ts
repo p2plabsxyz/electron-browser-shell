@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { EventEmitter } from 'node:events'
+import { BrowserWindow, webContents } from 'electron'
 import { ExtensionContext } from '../context'
 import { ExtensionEvent } from '../router'
 import { getExtensionManifest } from './common'
@@ -16,6 +17,67 @@ export class RuntimeAPI extends EventEmitter {
     handle('runtime.disconnectNative', this.disconnectNative, { permission: 'nativeMessaging' })
     handle('runtime.openOptionsPage', this.openOptionsPage)
     handle('runtime.sendNativeMessage', this.sendNativeMessage, { permission: 'nativeMessaging' })
+    handle('extension.getViews', this.getViews)
+    handle('extension.isAllowedFileSchemeAccess', this.isAllowedFileSchemeAccess)
+    handle('extension.isAllowedIncognitoAccess', this.isAllowedIncognitoAccess)
+  }
+
+  private isAllowedFileSchemeAccess = () => false
+  private isAllowedIncognitoAccess = () => false
+
+  private getViews = (
+    event: ExtensionEvent,
+    fetchProperties?: { type?: string; windowId?: number; tabId?: number },
+  ) => {
+    const extensionId = event.extension.id
+    const manifest = getExtensionManifest(event.extension)
+    const popupPath =
+      (manifest.manifest_version === 3 ? manifest.action?.default_popup : manifest.browser_action?.default_popup) ||
+      undefined
+    const optionsPath = manifest.options_ui?.page || manifest.options_page || undefined
+
+    const all = webContents.getAllWebContents().filter((wc) => {
+      if (wc.isDestroyed() || wc.session !== this.ctx.session) return false
+      const rawUrl = wc.getURL?.()
+      if (!rawUrl || !rawUrl.startsWith('chrome-extension://')) return false
+      try {
+        const parsed = new URL(rawUrl)
+        return parsed.hostname === extensionId
+      } catch {
+        return false
+      }
+    })
+
+    const views = all
+      .map((wc) => {
+        const rawUrl = wc.getURL()
+        const parsed = new URL(rawUrl)
+        const relPath = parsed.pathname.replace(/^\//, '')
+        const bw = BrowserWindow.fromWebContents(wc)
+        const type: string =
+          popupPath && relPath === popupPath
+            ? 'popup'
+            : optionsPath && relPath === optionsPath
+              ? 'tab'
+              : wc.getType() === 'backgroundPage'
+                ? 'background'
+                : 'tab'
+        return {
+          id: wc.id,
+          type,
+          windowId: bw?.id,
+          tabId: wc.id,
+          url: rawUrl,
+        }
+      })
+      .filter((view) => {
+        if (fetchProperties?.type && fetchProperties.type !== view.type) return false
+        if (typeof fetchProperties?.windowId === 'number' && fetchProperties.windowId !== view.windowId)
+          return false
+        if (typeof fetchProperties?.tabId === 'number' && fetchProperties.tabId !== view.tabId) return false
+        return true
+      })
+    return views
   }
 
   private connectNative = async (
