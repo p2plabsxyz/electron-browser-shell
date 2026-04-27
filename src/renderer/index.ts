@@ -528,16 +528,34 @@ export const injectExtensionAPIs = () => {
             windowId?: number
             tabId?: number
           }) => {
-            const views = (await ipcGetViews(fetchProperties)) || []
-            // Best-effort: if we're in a popup context and caller asks for popup views,
-            // expose the current window object to align with common extension checks.
+            let views = ((await ipcGetViews(fetchProperties)) || []) as Array<
+              Record<string, unknown>
+            >
+            // Same shape as IPC (id, type, windowId, tabId, url). Never mix in DOM Window
+            // references — extensions that need the live window can't get it cross-process anyway.
             if (fetchProperties?.type === 'popup') {
               try {
-                const href = typeof location !== 'undefined' ? String(location.href || '') : ''
+                const href =
+                  typeof location !== 'undefined' ? String(location.href || '') : ''
                 if (href.startsWith('chrome-extension://')) {
-                  return [window]
+                  const idx = views.findIndex((v) => typeof v.url === 'string' && v.url === href)
+                  if (idx >= 0) {
+                    views = views.slice()
+                    views[idx] = { ...views[idx], self: true }
+                  } else {
+                    views = [
+                      ...views,
+                      {
+                        type: 'popup',
+                        url: href,
+                        self: true,
+                      },
+                    ]
+                  }
                 }
-              } catch {}
+              } catch {
+                /* ignore */
+              }
             }
             return views
           }
