@@ -39,6 +39,7 @@ export class DownloadsAPI {
   private pendingByUrl = new Map<string, PendingDownloadRequest[]>()
   private itemIdByDownloadItem = new WeakMap<Electron.DownloadItem, number>()
   private activeItems = new Map<number, Electron.DownloadItem>()
+  private restoreReady: Promise<void>
 
   constructor(private ctx: ExtensionContext) {
     const handle = this.ctx.router.apiHandler()
@@ -58,11 +59,12 @@ export class DownloadsAPI {
     handle('downloads.show', this.unsupported('downloads.show'))
     handle('downloads.showDefaultFolder', this.unsupported('downloads.showDefaultFolder'))
 
-    this.restore()
+    this.restoreReady = this.restore()
     this.observeSessionDownloads()
   }
 
-  private restore() {
+  private async restore() {
+    await this.ctx.stateStore.whenHydrated()
     const state = this.ctx.stateStore.getNamespace<PersistedDownloadsState>(DOWNLOADS_STATE_NS, {
       nextId: 1,
       items: [],
@@ -193,6 +195,7 @@ export class DownloadsAPI {
     { extension }: ExtensionEvent,
     options: chrome.downloads.DownloadOptions,
   ): Promise<number> => {
+    await this.restoreReady
     const url = options?.url
     if (!url || typeof url !== 'string') {
       throw new Error('downloads.download requires a valid URL')
@@ -219,6 +222,7 @@ export class DownloadsAPI {
     { extension }: ExtensionEvent,
     query: chrome.downloads.DownloadQuery = {},
   ): Promise<PersistedDownloadItem[]> => {
+    await this.restoreReady
     let items = Array.from(this.records.values()).filter((item) => item.extensionId === extension.id)
 
     if (typeof query.id === 'number') {
@@ -244,6 +248,7 @@ export class DownloadsAPI {
   }
 
   private pause = async ({ extension }: ExtensionEvent, id: number): Promise<void> => {
+    await this.restoreReady
     const record = this.findRecordForExtension(extension.id, id)
     if (!record) throw new Error(`No download with id ${id}`)
     const item = this.activeItems.get(id)
@@ -252,6 +257,7 @@ export class DownloadsAPI {
   }
 
   private resume = async ({ extension }: ExtensionEvent, id: number): Promise<void> => {
+    await this.restoreReady
     const record = this.findRecordForExtension(extension.id, id)
     if (!record) throw new Error(`No download with id ${id}`)
     const item = this.activeItems.get(id)
@@ -260,6 +266,7 @@ export class DownloadsAPI {
   }
 
   private cancel = async ({ extension }: ExtensionEvent, id: number): Promise<void> => {
+    await this.restoreReady
     const record = this.findRecordForExtension(extension.id, id)
     if (!record) throw new Error(`No download with id ${id}`)
     const item = this.activeItems.get(id)
@@ -268,6 +275,7 @@ export class DownloadsAPI {
   }
 
   private erase = async ({ extension }: ExtensionEvent, query: chrome.downloads.DownloadQuery = {}) => {
+    await this.restoreReady
     const erasedIds: number[] = []
     for (const record of this.records.values()) {
       if (record.extensionId !== extension.id) continue

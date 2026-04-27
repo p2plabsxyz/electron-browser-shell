@@ -14,6 +14,7 @@ const ALARMS_STATE_NS = 'alarms'
 export class AlarmsAPI {
   private alarmsByExtension = new Map<string, AlarmMap>()
   private timers = new Map<string, NodeJS.Timeout>()
+  private restoreReady: Promise<void>
 
   constructor(private ctx: ExtensionContext) {
     const handle = this.ctx.router.apiHandler()
@@ -23,7 +24,7 @@ export class AlarmsAPI {
     handle('alarms.clear', this.clear, { permission: 'alarms' })
     handle('alarms.clearAll', this.clearAll, { permission: 'alarms' })
 
-    this.restoreFromState()
+    this.restoreReady = this.restoreFromState()
 
     const sessionExtensions = ctx.session.extensions || ctx.session
     sessionExtensions.on('extension-unloaded', (_event, extension) => {
@@ -44,7 +45,8 @@ export class AlarmsAPI {
     void this.ctx.stateStore.flush().catch(() => {})
   }
 
-  private restoreFromState() {
+  private async restoreFromState() {
+    await this.ctx.stateStore.whenHydrated()
     const persisted = this.getState()
     for (const [extensionId, alarms] of Object.entries(persisted)) {
       if (!Array.isArray(alarms) || alarms.length === 0) continue
@@ -153,11 +155,12 @@ export class AlarmsAPI {
     }
   }
 
-  private create = (
+  private create = async (
     { extension }: ExtensionEvent,
     alarmNameOrInfo?: string | chrome.alarms.AlarmCreateInfo,
     maybeInfo?: chrome.alarms.AlarmCreateInfo,
   ) => {
+    await this.restoreReady
     const alarmName = typeof alarmNameOrInfo === 'string' ? alarmNameOrInfo : ''
     const alarmInfo =
       typeof alarmNameOrInfo === 'object' && alarmNameOrInfo !== null
@@ -186,25 +189,32 @@ export class AlarmsAPI {
     this.saveState()
   }
 
-  private get = ({ extension }: ExtensionEvent, name?: string): chrome.alarms.Alarm | undefined => {
+  private get = async (
+    { extension }: ExtensionEvent,
+    name?: string,
+  ): Promise<chrome.alarms.Alarm | undefined> => {
+    await this.restoreReady
     const alarmName = typeof name === 'string' ? name : ''
     const alarmMap = this.alarmsByExtension.get(extension.id)
     const alarm = alarmMap?.get(alarmName)
     return alarm ? this.toChromeAlarm(alarm) : undefined
   }
 
-  private getAll = ({ extension }: ExtensionEvent): chrome.alarms.Alarm[] => {
+  private getAll = async ({ extension }: ExtensionEvent): Promise<chrome.alarms.Alarm[]> => {
+    await this.restoreReady
     const alarmMap = this.alarmsByExtension.get(extension.id)
     if (!alarmMap) return []
     return Array.from(alarmMap.values()).map((alarm) => this.toChromeAlarm(alarm))
   }
 
-  private clear = ({ extension }: ExtensionEvent, name?: string): boolean => {
+  private clear = async ({ extension }: ExtensionEvent, name?: string): Promise<boolean> => {
+    await this.restoreReady
     const alarmName = typeof name === 'string' ? name : ''
     return this.clearForExtension(extension.id, alarmName)
   }
 
-  private clearAll = ({ extension }: ExtensionEvent): boolean => {
+  private clearAll = async ({ extension }: ExtensionEvent): Promise<boolean> => {
+    await this.restoreReady
     const alarmMap = this.alarmsByExtension.get(extension.id)
     if (!alarmMap || alarmMap.size === 0) return false
     this.clearExtension(extension.id, true)
