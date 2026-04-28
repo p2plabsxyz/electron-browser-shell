@@ -378,6 +378,21 @@ export const injectExtensionAPIs = () => {
         factory: browserActionFactory,
       },
 
+      alarms: {
+        shouldInject: () => !!(manifest.permissions as string[] | undefined)?.includes('alarms'),
+        factory: (base) => {
+          return {
+            ...base,
+            create: invokeExtension('alarms.create'),
+            get: invokeExtension('alarms.get'),
+            getAll: invokeExtension('alarms.getAll'),
+            clear: invokeExtension('alarms.clear'),
+            clearAll: invokeExtension('alarms.clearAll'),
+            onAlarm: new ExtensionEvent('alarms.onAlarm'),
+          }
+        },
+      },
+
       commands: {
         factory: (base) => {
           return {
@@ -484,19 +499,19 @@ export const injectExtensionAPIs = () => {
         factory: (base) => {
           return {
             ...base,
-            acceptDanger: invokeExtension('downloads.acceptDanger', { noop: true }),
-            cancel: invokeExtension('downloads.cancel', { noop: true }),
-            download: invokeExtension('downloads.download', { noop: true }),
-            erase: invokeExtension('downloads.erase', { noop: true }),
-            getFileIcon: invokeExtension('downloads.getFileIcon', { noop: true }),
-            open: invokeExtension('downloads.open', { noop: true }),
-            pause: invokeExtension('downloads.pause', { noop: true }),
-            removeFile: invokeExtension('downloads.removeFile', { noop: true }),
-            resume: invokeExtension('downloads.resume', { noop: true }),
-            search: invokeExtension('downloads.search', { noop: true }),
-            setUiOptions: invokeExtension('downloads.setUiOptions', { noop: true }),
-            show: invokeExtension('downloads.show', { noop: true }),
-            showDefaultFolder: invokeExtension('downloads.showDefaultFolder', { noop: true }),
+            acceptDanger: invokeExtension('downloads.acceptDanger'),
+            cancel: invokeExtension('downloads.cancel'),
+            download: invokeExtension('downloads.download'),
+            erase: invokeExtension('downloads.erase'),
+            getFileIcon: invokeExtension('downloads.getFileIcon'),
+            open: invokeExtension('downloads.open'),
+            pause: invokeExtension('downloads.pause'),
+            removeFile: invokeExtension('downloads.removeFile'),
+            resume: invokeExtension('downloads.resume'),
+            search: invokeExtension('downloads.search'),
+            setUiOptions: invokeExtension('downloads.setUiOptions'),
+            show: invokeExtension('downloads.show'),
+            showDefaultFolder: invokeExtension('downloads.showDefaultFolder'),
             onChanged: new ExtensionEvent('downloads.onChanged'),
             onCreated: new ExtensionEvent('downloads.onCreated'),
             onDeterminingFilename: new ExtensionEvent('downloads.onDeterminingFilename'),
@@ -507,18 +522,58 @@ export const injectExtensionAPIs = () => {
 
       extension: {
         factory: (base) => {
+          const ipcGetViews = invokeExtension('extension.getViews')
+          const resolveViews = async (fetchProperties?: {
+            type?: string
+            windowId?: number
+            tabId?: number
+          }) => {
+            let views = ((await ipcGetViews(fetchProperties)) || []) as Array<
+              Record<string, unknown>
+            >
+            // Same shape as IPC (id, type, windowId, tabId, url). Never mix in DOM Window
+            // references — extensions that need the live window can't get it cross-process anyway.
+            if (fetchProperties?.type === 'popup') {
+              try {
+                const href =
+                  typeof location !== 'undefined' ? String(location.href || '') : ''
+                if (href.startsWith('chrome-extension://')) {
+                  const idx = views.findIndex((v) => typeof v.url === 'string' && v.url === href)
+                  if (idx >= 0) {
+                    views = views.slice()
+                    views[idx] = { ...views[idx], self: true }
+                  } else {
+                    views = [
+                      ...views,
+                      {
+                        type: 'popup',
+                        url: href,
+                        self: true,
+                      },
+                    ]
+                  }
+                }
+              } catch {
+                /* ignore */
+              }
+            }
+            return views
+          }
           return {
             ...base,
-            isAllowedFileSchemeAccess: invokeExtension('extension.isAllowedFileSchemeAccess', {
-              noop: true,
-              defaultResponse: false,
-            }),
-            isAllowedIncognitoAccess: invokeExtension('extension.isAllowedIncognitoAccess', {
-              noop: true,
-              defaultResponse: false,
-            }),
-            // TODO: Add native implementation
-            getViews: () => [],
+            isAllowedFileSchemeAccess: invokeExtension('extension.isAllowedFileSchemeAccess'),
+            isAllowedIncognitoAccess: invokeExtension('extension.isAllowedIncognitoAccess'),
+            getViews: (...args: any[]) => {
+              const callback = typeof args[args.length - 1] === 'function' ? args.pop() : undefined
+              const fetchProperties =
+                args.length > 0 && args[0] && typeof args[0] === 'object' ? args[0] : undefined
+              const result = resolveViews(fetchProperties)
+              if (callback) {
+                result.then(callback).catch(() => callback([]))
+                return
+              }
+              return result
+            },
           }
         },
       },
@@ -641,7 +696,9 @@ export const injectExtensionAPIs = () => {
       },
 
       scripting: {
-        shouldInject: () => manifest.manifest_version === 3,
+        shouldInject: () =>
+          manifest.manifest_version === 3 ||
+          !!(manifest.permissions as string[] | undefined)?.includes('scripting'),
         factory: (base) => {
           const ipcExecuteScript = invokeExtension('scripting.executeScript')
           return {
@@ -653,6 +710,10 @@ export const injectExtensionAPIs = () => {
               }
               return ipcExecuteScript(injection)
             },
+            registerContentScripts: invokeExtension('scripting.registerContentScripts'),
+            getRegisteredContentScripts: invokeExtension('scripting.getRegisteredContentScripts'),
+            unregisterContentScripts: invokeExtension('scripting.unregisterContentScripts'),
+            updateContentScripts: invokeExtension('scripting.updateContentScripts'),
           }
         },
       },
@@ -732,11 +793,25 @@ export const injectExtensionAPIs = () => {
               return fn(...args)
             }
 
+          /** storage.get must never pass undefined to callbacks (extensions index nested prefs). */
+          const cbWrapStorageGet = (fn: (...a: any[]) => Promise<any>) =>
+            (...args: any[]) => {
+              const last = args[args.length - 1]
+              if (typeof last === 'function') {
+                const cb = args.pop()
+                fn(...args)
+                  .then((r) => cb(r != null && typeof r === 'object' ? r : {}))
+                  .catch(() => cb({}))
+                return
+              }
+              return fn(...args).then((r) => (r != null && typeof r === 'object' ? r : {}))
+            }
+
           // Per-area onChanged is required by real extensions (e.g. Dark Reader uses
           // chrome.storage.local.onChanged). It aliases the same listeners as
           // chrome.storage.onChanged; the event payload includes the storage area.
           const ipcLocal = {
-            get: cbWrap(invokeExtension('storage.local.get')),
+            get: cbWrapStorageGet(invokeExtension('storage.local.get')),
             set: cbWrap(invokeExtension('storage.local.set')),
             remove: cbWrap(invokeExtension('storage.local.remove')),
             clear: cbWrap(invokeExtension('storage.local.clear')),
@@ -754,7 +829,7 @@ export const injectExtensionAPIs = () => {
             sync: {
               ...(base as any)?.sync ?? ipcLocal,
               onChanged,
-              get: cbWrap(invokeExtension('storage.sync.get')),
+              get: cbWrapStorageGet(invokeExtension('storage.sync.get')),
               set: cbWrap(invokeExtension('storage.sync.set')),
               remove: cbWrap(invokeExtension('storage.sync.remove')),
               clear: cbWrap(invokeExtension('storage.sync.clear')),
@@ -801,13 +876,23 @@ export const injectExtensionAPIs = () => {
             reload: invokeExtension('tabs.reload'),
             update: invokeExtension('tabs.update'),
             remove: invokeExtension('tabs.remove'),
+            move: invokeExtension('tabs.move'),
+            highlight: invokeExtension('tabs.highlight'),
             goBack: invokeExtension('tabs.goBack'),
             goForward: invokeExtension('tabs.goForward'),
+            duplicate: invokeExtension('tabs.duplicate'),
+            getZoom: invokeExtension('tabs.getZoom'),
+            setZoom: invokeExtension('tabs.setZoom'),
+            getZoomSettings: invokeExtension('tabs.getZoomSettings'),
+            setZoomSettings: invokeExtension('tabs.setZoomSettings'),
             onCreated: new ExtensionEvent('tabs.onCreated'),
             onRemoved: new ExtensionEvent('tabs.onRemoved'),
             onUpdated: new ExtensionEvent('tabs.onUpdated'),
             onActivated: new ExtensionEvent('tabs.onActivated'),
             onReplaced: new ExtensionEvent('tabs.onReplaced'),
+            onZoomChange: new ExtensionEvent('tabs.onZoomChange'),
+            onMoved: new ExtensionEvent('tabs.onMoved'),
+            onHighlighted: new ExtensionEvent('tabs.onHighlighted'),
           }
           return api
         },

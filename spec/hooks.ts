@@ -5,7 +5,7 @@ import { AddressInfo } from 'net'
 import { ElectronChromeExtensions } from '../'
 import { emittedOnce } from './events-helpers'
 import { addCrxPreload, createCrxSession, waitForBackgroundScriptEvaluated } from './crx-helpers'
-import { ChromeExtensionImpl } from '../dist/types/browser/impl'
+import type { ChromeExtensionImpl } from '../src/browser/impl'
 
 export const useServer = () => {
   const emptyPage = `<!DOCTYPE html>

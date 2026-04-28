@@ -29,6 +29,9 @@ import { PermissionsAPI } from './api/permissions'
 import { ProxyAPI } from './api/proxy'
 import { ScriptingAPI } from './api/scripting'
 import { resolvePartition } from './partition'
+import { ExtensionStateStore } from './state-store'
+import { AlarmsAPI } from './api/alarms'
+import { DownloadsAPI } from './api/downloads'
 
 function checkVersion() {
   const electronVersion = process.versions.electron
@@ -49,10 +52,15 @@ function normalizeProxyAuthHost(host: string): string {
 function resolvePreloadPath(modulePath?: string) {
   // Attempt to resolve preload path from module exports
   try {
-    return createRequire(__dirname).resolve('peersky-chrome-extensions/preload')
-  } catch (error) {
-    if (process.env.NODE_ENV !== 'production') {
-      console.error(error)
+    return createRequire(__dirname).resolve('@p2plabs/peersky-chrome-extensions/preload')
+  } catch {
+    // Backward compatibility for older package names.
+    try {
+      return createRequire(__dirname).resolve('peersky-chrome-extensions/preload')
+    } catch (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error(error)
+      }
     }
   }
 
@@ -151,6 +159,8 @@ export class ElectronChromeExtensions extends EventEmitter {
     permissions: PermissionsAPI
     proxy: ProxyAPI
     runtime: RuntimeAPI
+    alarms: AlarmsAPI
+    downloads: DownloadsAPI
     scripting: ScriptingAPI
     storageSync: StorageSyncAPI
     tabs: TabsAPI
@@ -174,13 +184,18 @@ export class ElectronChromeExtensions extends EventEmitter {
 
     const router = new ExtensionRouter(session)
     const store = new ExtensionStore(impl)
+    const stateStore = new ExtensionStateStore(session)
 
     this.ctx = {
       emit: this.emit.bind(this),
       router,
       session,
       store,
+      stateStore,
     }
+    void stateStore.hydrate().catch((error) => {
+      console.error('Failed to hydrate extension API state store:', error)
+    })
 
     const declarativeNetRequest = new DeclarativeNetRequestAPI(this.ctx)
     this.api = {
@@ -197,6 +212,8 @@ export class ElectronChromeExtensions extends EventEmitter {
       permissions: new PermissionsAPI(this.ctx),
       proxy: new ProxyAPI(this.ctx),
       runtime: new RuntimeAPI(this.ctx),
+      alarms: new AlarmsAPI(this.ctx),
+      downloads: new DownloadsAPI(this.ctx),
       scripting: new ScriptingAPI(this.ctx),
       storageSync: new StorageSyncAPI(this.ctx),
       tabs: new TabsAPI(this.ctx),
@@ -259,6 +276,16 @@ export class ElectronChromeExtensions extends EventEmitter {
     const sessionExtensions = this.ctx.session.extensions || this.ctx.session
     sessionExtensions.addListener('extension-loaded', (_event, extension) => {
       readLoadedExtensionManifest(this.ctx, extension)
+    })
+    sessionExtensions.addListener('extension-unloaded', () => {
+      void this.ctx.stateStore.flush().catch((error) => {
+        console.error('Failed to flush extension API state store:', error)
+      })
+    })
+    app.once('before-quit', () => {
+      void this.ctx.stateStore.flush().catch((error) => {
+        console.error('Failed to flush extension API state store during shutdown:', error)
+      })
     })
   }
 

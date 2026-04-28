@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { ExtensionRouter } from './router'
 import { ExtensionStore } from './store'
+import { ExtensionStateStore } from './state-store'
 
 /** Shared context for extensions in a session. */
 export interface ExtensionContext {
@@ -8,4 +9,5 @@ export interface ExtensionContext {
   router: ExtensionRouter
   session: Electron.Session
   store: ExtensionStore
+  stateStore: ExtensionStateStore
 }

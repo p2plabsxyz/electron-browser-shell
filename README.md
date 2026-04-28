@@ -423,15 +423,15 @@ See [Electron's Notification tutorial](https://www.electronjs.org/docs/tutorial/
 - [x] chrome.tabs.connect
 - [x] chrome.tabs.sendMessage
 - [x] chrome.tabs.create
-- [ ] chrome.tabs.duplicate
+- [x] chrome.tabs.duplicate
 - [x] chrome.tabs.query
-- [ ] chrome.tabs.highlight
+- [x] chrome.tabs.highlight
 - [x] chrome.tabs.update
-- [ ] chrome.tabs.move
+- [x] chrome.tabs.move
 - [x] chrome.tabs.reload
 - [x] chrome.tabs.remove
 - [ ] chrome.tabs.detectLanguage
-- [ ] chrome.tabs.captureVisibleTab
+- [x] chrome.tabs.captureVisibleTab
 - [x] chrome.tabs.executeScript
 - [x] chrome.tabs.insertCSS
 - [x] chrome.tabs.setZoom
@@ -443,9 +443,9 @@ See [Electron's Notification tutorial](https://www.electronjs.org/docs/tutorial/
 - [x] chrome.tabs.goBack
 - [x] chrome.tabs.onCreated
 - [x] chrome.tabs.onUpdated
-- [ ] chrome.tabs.onMoved
+- [x] chrome.tabs.onMoved
 - [x] chrome.tabs.onActivated
-- [ ] chrome.tabs.onHighlighted
+- [x] chrome.tabs.onHighlighted
 - [ ] chrome.tabs.onDetached
 - [ ] chrome.tabs.onAttached
 - [x] chrome.tabs.onRemoved
@@ -499,7 +499,8 @@ These APIs are implemented in this package (beyond the checklist above). See the
 | [`chrome.proxy`](https://developer.chrome.com/docs/extensions/reference/proxy/) | Maps Chrome `ProxyConfig` to Electron `session.setProxy`. `proxy.settings.clear` only clears when the caller is the extension currently controlling proxy settings. |
 | [`chrome.declarativeNetRequest`](https://developer.chrome.com/docs/extensions/reference/declarativeNetRequest/) | Rule evaluation for static/dynamic/session rules; integrates with the app’s `webRequest` bridge for blocking/redirects. |
 | [`chrome.webRequest`](https://developer.chrome.com/docs/extensions/reference/webRequest/) | Requires app-side hooks (`notifyWebRequest*` methods on `ElectronChromeExtensions`). |
-| [`chrome.scripting`](https://developer.chrome.com/docs/extensions/reference/scripting/) | Script injection where supported by Electron. |
+| [`chrome.scripting`](https://developer.chrome.com/docs/extensions/reference/scripting/) | Supports `executeScript`/`insertCSS` plus dynamic registry APIs: `registerContentScripts`, `getRegisteredContentScripts`, `updateContentScripts`, `unregisterContentScripts` (persisted via extension state store). |
+| [`chrome.extension`](https://developer.chrome.com/docs/extensions/reference/extension/) | Best-effort `getViews`: metadata objects with `id`, `type`, `windowId`, `url`. `tabId` is set only for `type: "tab"` (page views), so `fetchProperties.tabId` matches Chrome-style filtering. In a popup with `fetchProperties.type === 'popup'`, the renderer may add `self: true` when the IPC list omits or matches by URL — not live `Window` instances. |
 | [`chrome.management`](https://developer.chrome.com/docs/extensions/reference/management/) | Limited extension metadata helpers. |
 | [`chrome.permissions`](https://developer.chrome.com/docs/extensions/reference/permissions/) | Runtime grants update an internal permission map; router permission checks honor **optional** permissions granted via `chrome.permissions.request`, not only `manifest.permissions`. |
 

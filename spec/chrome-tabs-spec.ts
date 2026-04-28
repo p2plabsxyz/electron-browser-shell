@@ -3,7 +3,7 @@ import { app, BrowserWindow } from 'electron'
 import { emittedOnce } from './events-helpers'
 
 import { useExtensionBrowser, useServer } from './hooks'
-import { ChromeExtensionImpl } from '../dist/types/browser/impl'
+import type { ChromeExtensionImpl } from '../src/browser/impl'
 
 describe('chrome.tabs', () => {
   let assignTabDetails: ChromeExtensionImpl['assignTabDetails']
@@ -140,6 +140,35 @@ describe('chrome.tabs', () => {
       expect(results).to.be.length(1)
       expect(results[0].url).to.be.equal(server.getUrl())
     })
+
+    it('returns deterministic window-local indexes', async () => {
+      const first = await browser.crx.exec('tabs.create', { url: `${server.getUrl()}index-a` })
+      const second = await browser.crx.exec('tabs.create', { url: `${server.getUrl()}index-b` })
+      await new Promise<void>((resolve) => setTimeout(resolve, 20))
+
+      const sameWindowTabs = await browser.crx.exec('tabs.query', { windowId: browser.window.id })
+      const firstTab = sameWindowTabs.find((tab: any) => tab.id === first.id)
+      const secondTab = sameWindowTabs.find((tab: any) => tab.id === second.id)
+
+      expect(firstTab).to.be.an('object')
+      expect(secondTab).to.be.an('object')
+      expect(firstTab.index).to.be.a('number')
+      expect(secondTab.index).to.be.a('number')
+      expect(secondTab.index).to.equal(firstTab.index + 1)
+    })
+
+    it('supports index filtering against stable indexes', async () => {
+      const tabs = await browser.crx.exec('tabs.query', { windowId: browser.window.id })
+      expect(tabs.length).to.be.greaterThan(0)
+      const target = tabs[0]
+
+      const byIndex = await browser.crx.exec('tabs.query', {
+        windowId: browser.window.id,
+        index: target.index,
+      })
+      expect(byIndex).to.be.an('array')
+      expect(byIndex.some((tab: any) => tab.id === target.id)).to.equal(true)
+    })
   })
 
   describe('reload()', () => {
@@ -235,6 +264,112 @@ describe('chrome.tabs', () => {
       browser.crx.exec('tabs.goBack', tabId)
       await navigatePromise
       expect(browser.window.webContents.getURL()).to.equal(initialUrl)
+    })
+  })
+
+  describe('duplicate()', () => {
+    it('duplicates a tab in the same window with the same URL', async () => {
+      const source = await browser.crx.exec('tabs.get', browser.window.webContents.id)
+
+      const duplicated = await browser.crx.exec('tabs.duplicate', source.id)
+      expect(duplicated).to.be.an('object')
+      expect(duplicated.id).to.not.equal(source.id)
+      expect(duplicated.windowId).to.equal(source.windowId)
+      expect(duplicated.url).to.equal(source.url)
+    })
+  })
+
+  describe('move() and highlight()', () => {
+    it('moves a tab to the requested index', async () => {
+      const created = await browser.crx.exec('tabs.create', { url: `${server.getUrl()}moved` })
+      const moved = await browser.crx.exec('tabs.move', created.id, { index: 0 })
+      expect(moved).to.be.an('object')
+      expect((moved as any).id).to.equal(created.id)
+      expect((moved as any).index).to.equal(0)
+    })
+
+    it('accepts index -1 to move a tab to the end of the window', async () => {
+      await browser.crx.exec('tabs.create', { url: `${server.getUrl()}move-end-a` })
+      const toMove = await browser.crx.exec('tabs.create', { url: `${server.getUrl()}move-end-b` })
+      const moved = await browser.crx.exec('tabs.move', toMove.id, { index: -1 })
+      expect(moved).to.be.an('object')
+      expect((moved as any).id).to.equal(toMove.id)
+      const all = await browser.crx.exec('tabs.query', { windowId: browser.window.id })
+      expect(all).to.be.an('array')
+      const idx = (all as any[]).findIndex((t: any) => t.id === toMove.id)
+      expect(idx).to.equal((all as any[]).length - 1)
+    })
+
+    it('highlights the requested index', async () => {
+      await browser.crx.exec('tabs.create', { url: `${server.getUrl()}highlight-a` })
+      await browser.crx.exec('tabs.create', { url: `${server.getUrl()}highlight-b` })
+      const highlightedWindow = await browser.crx.exec('tabs.highlight', {
+        windowId: browser.window.id,
+        tabs: 1,
+      })
+      expect(highlightedWindow).to.be.an('object')
+      expect((highlightedWindow as any).id).to.equal(browser.window.id)
+
+      const highlightedTabs = await browser.crx.exec('tabs.query', {
+        windowId: browser.window.id,
+        highlighted: true,
+      })
+      expect(highlightedTabs).to.be.an('array')
+      expect(highlightedTabs.length).to.be.greaterThan(0)
+    })
+  })
+
+  describe('zoom methods', () => {
+    it('supports zoom roundtrip', async () => {
+      const tabId = browser.window.webContents.id
+      const initial = await browser.crx.exec('tabs.getZoom', tabId)
+      expect(initial).to.be.a('number')
+
+      await browser.crx.exec('tabs.setZoom', tabId, 1.25)
+      const updated = await browser.crx.exec('tabs.getZoom', tabId)
+      expect(updated).to.be.closeTo(1.25, 0.01)
+    })
+
+    it('supports reset via setZoom(..., 0)', async () => {
+      const tabId = browser.window.webContents.id
+      await browser.crx.exec('tabs.setZoom', tabId, 1.35)
+      const changed = await browser.crx.exec('tabs.getZoom', tabId)
+      expect(changed).to.be.closeTo(1.35, 0.01)
+
+      await browser.crx.exec('tabs.setZoom', tabId, 0)
+      const reset = await browser.crx.exec('tabs.getZoom', tabId)
+      expect(reset).to.be.closeTo(1, 0.01)
+    })
+
+    it('returns zoom settings and accepts supported settings', async () => {
+      const tabId = browser.window.webContents.id
+      const settings = await browser.crx.exec('tabs.getZoomSettings', tabId)
+      expect(settings).to.be.an('object')
+      expect(settings.mode).to.equal('automatic')
+      expect(settings.scope).to.equal('per-origin')
+
+      await browser.crx.exec('tabs.setZoomSettings', tabId, {
+        mode: 'automatic',
+        scope: 'per-origin',
+      })
+      const after = await browser.crx.exec('tabs.getZoomSettings', tabId)
+      expect(after.mode).to.equal('automatic')
+      expect(after.scope).to.equal('per-origin')
+    })
+
+    it('accepts per-tab manual settings', async () => {
+      const tabId = browser.window.webContents.id
+      await browser.crx.exec('tabs.setZoomSettings', tabId, {
+        mode: 'manual',
+        scope: 'per-tab',
+        defaultZoomFactor: 1.1,
+      })
+      await browser.crx.exec('tabs.setZoom', tabId, 1.2)
+
+      const settings = await browser.crx.exec('tabs.getZoomSettings', tabId)
+      expect(settings).to.be.an('object')
+      expect(settings.mode).to.equal('manual')
+      expect(settings.scope).to.equal('per-tab')
     })
   })
 
